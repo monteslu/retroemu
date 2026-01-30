@@ -69,7 +69,7 @@ function createSymbolMap(mode) {
 }
 
 async function initChafa() {
-  const chafaModule = await import('chafa-wasm');
+  const chafaModule = await import('@monteslu/chafa-wasm');
   chafa = chafaModule.default || chafaModule;
   if (typeof chafa === 'function') {
     chafa = await chafa();

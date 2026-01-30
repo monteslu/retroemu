@@ -165,11 +165,16 @@ export class InputManager {
       process.stdin.setEncoding('utf8');
 
       process.stdin.on('data', (key) => {
-        // Ctrl+C to exit
-        if (key === '\u0003') {
+        // Ctrl+C or ESC to exit
+        if (key === '\u0003' || (key === '\u001b' && key.length === 1)) {
           process.emit('SIGINT');
           return;
         }
+
+        // F1 = reset, F5 = save state, F7 = load state
+        if (key === '\u001b[11~') process.emit('emu:reset');
+        if (key === '\u001b[15~') process.emit('emu:save');
+        if (key === '\u001b[18~') process.emit('emu:load');
 
         // Handle arrow keys (escape sequences)
         if (key === '\u001b[A') {
@@ -216,6 +221,7 @@ export class InputManager {
 
     if (process.stdin.isTTY) {
       process.stdin.setRawMode(false);
+      process.stdin.removeAllListeners('data');
       process.stdin.pause();
     }
   }
