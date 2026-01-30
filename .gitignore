@@ -1,0 +1,19 @@
+# Dependencies
+node_modules/
+
+# Build source (large, rebuild with scripts)
+build/
+
+# Runtime data
+saves/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+*.swp
+*.swo
+.vscode/
+.idea/
