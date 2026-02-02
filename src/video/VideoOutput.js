@@ -26,7 +26,12 @@ export class VideoOutput {
     this.pendingFrame = false;
     this.displayAspectRatio = 4 / 3; // Default to 4:3, can be set by core
     this.contrast = 1.0; // 1.0 = no change, >1 = more contrast
-    this.renderMode = 'detailed'; // 'detailed' or 'fast' (half blocks)
+
+    // Render options (3 independent settings)
+    this.symbols = 'block';  // block, half, ascii, solid, stipple, quad, sextant, octant, braille
+    this.colors = 'true';    // true, 256, 16, 2
+    this.fgOnly = false;     // foreground color only
+    this.dither = false;     // Floyd-Steinberg dithering
   }
 
   async init() {
@@ -71,13 +76,22 @@ export class VideoOutput {
     this.contrast = Math.max(0.5, Math.min(3.0, value));
   }
 
-  setRenderMode(mode) {
-    const validModes = ['fast', 'ascii', 'braille', 'braille-dither'];
-    if (validModes.includes(mode)) {
-      this.renderMode = mode;
-    } else {
-      this.renderMode = 'detailed';
-    }
+  setSymbols(symbols) {
+    const validSymbols = ['block', 'half', 'ascii', 'solid', 'stipple', 'quad', 'sextant', 'octant', 'braille'];
+    this.symbols = validSymbols.includes(symbols) ? symbols : 'block';
+  }
+
+  setColors(colors) {
+    const validColors = ['true', '256', '16', '2'];
+    this.colors = validColors.includes(colors) ? colors : 'true';
+  }
+
+  setFgOnly(enabled) {
+    this.fgOnly = !!enabled;
+  }
+
+  setDither(enabled) {
+    this.dither = !!enabled;
   }
 
   onFrame(wasmModule, dataPtr, width, height, pitch, pixelFormat) {
@@ -119,7 +133,10 @@ export class VideoOutput {
       termCols: usedCols,
       termRows: usedRows,
       contrast: this.contrast,
-      renderMode: this.renderMode
+      symbols: this.symbols,
+      colors: this.colors,
+      fgOnly: this.fgOnly,
+      dither: this.dither
     }, [rgbaData.buffer]);
 
     this.rgbaBuffer = null; // Need new buffer since we transferred

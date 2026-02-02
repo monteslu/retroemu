@@ -16,7 +16,10 @@ let romPath = null;
 let saveDir = null;
 let frameSkip = 2;
 let contrast = 1.0;
-let renderMode = 'fast'; // half-blocks by default
+let symbols = 'block';
+let colors = 'true';
+let fgOnly = false;
+let dither = false;
 let disableGamepad = false;
 let debugInput = false;
 
@@ -27,12 +30,14 @@ for (let i = 0; i < args.length; i++) {
     frameSkip = parseInt(args[++i], 10);
   } else if (args[i] === '--contrast' && args[i + 1]) {
     contrast = parseFloat(args[++i]);
-  } else if (args[i] === '--ascii') {
-    renderMode = 'ascii';
-  } else if (args[i] === '--braille') {
-    renderMode = 'braille';
-  } else if (args[i] === '--braille-dither') {
-    renderMode = 'braille-dither';
+  } else if (args[i] === '--symbols' && args[i + 1]) {
+    symbols = args[++i];
+  } else if (args[i] === '--colors' && args[i + 1]) {
+    colors = args[++i];
+  } else if (args[i] === '--fg-only') {
+    fgOnly = true;
+  } else if (args[i] === '--dither') {
+    dither = true;
   } else if (args[i] === '--no-gamepad') {
     disableGamepad = true;
   } else if (args[i] === '--debug-input') {
@@ -85,7 +90,10 @@ const videoOutput = new VideoOutput();
 await videoOutput.init();
 videoOutput.setFrameSkip(frameSkip);
 videoOutput.setContrast(contrast);
-videoOutput.setRenderMode(renderMode);
+videoOutput.setSymbols(symbols);
+videoOutput.setColors(colors);
+videoOutput.setFgOnly(fgOnly);
+videoOutput.setDither(dither);
 
 const audioBridge = new AudioBridge();
 const inputManager = new InputManager({ disableGamepad, debugInput });
@@ -167,9 +175,15 @@ function printUsage() {
   console.log(`  --save-dir <dir>     Directory for save files (default: <rom-dir>/saves)`);
   console.log(`  --frame-skip <n>     Render every Nth frame to terminal (default: 2)`);
   console.log(`  --contrast <n>       Contrast boost, 1.0=normal, 1.5=more contrast (default: 1.0)`);
-  console.log(`  --ascii              Use ASCII characters instead of block characters`);
-  console.log(`  --braille            Use braille characters (black and white)`);
-  console.log(`  --braille-dither     Use braille with Floyd-Steinberg dithering`);
+  console.log(``);
+  console.log(`Graphics options:`);
+  console.log(`  --symbols <type>     Symbol set: block, half, ascii, solid, stipple,`);
+  console.log(`                       quad, sextant, octant, braille (default: block)`);
+  console.log(`  --colors <mode>      Color mode: true, 256, 16, 2 (default: true)`);
+  console.log(`  --fg-only            Foreground color only (black background)`);
+  console.log(`  --dither             Enable Floyd-Steinberg dithering`);
+  console.log(``);
+  console.log(`Other:`);
   console.log(`  --no-gamepad         Disable gamepad input (keyboard only)`);
   console.log(`  -h, --help           Show this help`);
   console.log(``);

@@ -156,7 +156,16 @@ Options:
   --save-dir <dir>     Directory for save files (default: <rom-dir>/saves)
   --frame-skip <n>     Render every Nth frame to terminal (default: 2)
   --contrast <n>       Contrast boost, 1.0=normal, 1.5+=enhanced (default: 1.0)
-  --ascii              Use detailed Unicode symbols instead of half-blocks
+
+Graphics options:
+  --symbols <type>     Symbol set to use for rendering:
+                       block (default), half, ascii, solid, stipple,
+                       quad, sextant, octant, braille
+  --colors <mode>      Color mode: true (default), 256, 16, 2
+  --fg-only            Foreground color only (black background)
+  --dither             Enable Floyd-Steinberg dithering
+
+Other:
   --no-gamepad         Disable gamepad input (keyboard only)
   -h, --help           Show help
 ```
@@ -164,22 +173,47 @@ Options:
 Examples:
 
 ```bash
-retroemu ~/roms/mario.nes
-retroemu ~/roms/zelda.zip              # extracts ROM from ZIP automatically
-emu --frame-skip 3 ~/roms/zelda.sfc
-emu --save-dir ~/.emu/saves ~/roms/pokemon.gbc
-emu --contrast 1.5 ~/roms/space_invaders.a26   # boost contrast for dark games
+retroemu ~/roms/my_game.nes
+retroemu ~/roms/my_game.zip            # extracts ROM from ZIP automatically
+retroemu --frame-skip 3 ~/roms/my_game.sfc
+retroemu --save-dir ~/.emu/saves ~/roms/my_game.gbc
+retroemu --contrast 1.5 ~/roms/my_game.a26             # boost contrast for dark games
+retroemu --symbols braille --colors 2 ~/roms/my_game.gb   # monochrome braille
+retroemu --symbols ascii --fg-only ~/roms/my_game.nes     # ASCII on black background
 ```
 
 ## Rendering
 
-The emulator uses [chafa-wasm](https://github.com/nicholasgasior/chafa-wasm) to convert pixel data to truecolor ANSI sequences.
+The emulator uses [@monteslu/chafa-wasm](https://github.com/monteslu/chafa-wasm) (SIMD-optimized fork) to convert pixel data to ANSI sequences.
 
-**Default mode (half-blocks):** Uses vertical half-block characters (▀▄) which provide 2 vertical pixels per character cell. This matches the blocky pixel art aesthetic of retro games and renders quickly.
+### Symbol Sets (`--symbols`)
 
-**ASCII mode (`--ascii`):** Uses a wider variety of Unicode block and border characters for more detail. May look better for some games but can introduce visual artifacts.
+| Symbol Set | Description | Characters |
+|------------|-------------|------------|
+| `block` (default) | Full block characters | ▀ ▄ █ ░ ▒ ▓ |
+| `half` | Vertical half blocks only | ▀ ▄ |
+| `ascii` | ASCII printable characters | @ # % & * |
+| `solid` | Space + background color only | (chunky but fast) |
+| `stipple` | Shading characters | ░ ▒ ▓ |
+| `quad` | 2x2 quadrant blocks | ▖ ▗ ▘ ▝ ▚ ▞ █ |
+| `sextant` | 2x3 sextant blocks | 🬀🬁🬂... (highest resolution) |
+| `octant` | 2x4 octant blocks | 🮖🮗... |
+| `braille` | Braille dot patterns | ⠿ ⡿ ⣿ (great for B&W) |
 
-**Contrast boost (`--contrast`):** Some games (especially Atari) have low contrast that doesn't translate well to terminal rendering. Use `--contrast 1.5` or higher to boost visibility.
+### Color Modes (`--colors`)
+
+| Mode | Colors | Best For |
+|------|--------|----------|
+| `true` (default) | 16 million | Modern terminals |
+| `256` | 256 indexed | Older terminals, lower bandwidth |
+| `16` | 16 ANSI | Very old terminals |
+| `2` | 2 (B&W) | Monochrome display, braille |
+
+### Additional Options
+
+- **`--fg-only`** — Foreground color only with black background. Reduces visual noise and can improve contrast.
+- **`--dither`** — Floyd-Steinberg dithering. Best combined with limited color modes (256, 16, 2).
+- **`--contrast`** — Some games (especially Atari) have low contrast. Use `--contrast 1.5` or higher to boost visibility.
 
 ## Controls
 

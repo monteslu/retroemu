@@ -24,7 +24,7 @@ export class InputManager {
     // Maps button id -> frame number when last pressed
     this._keyLastPressed = new Map();
     this._currentFrame = 0;
-    this._keyHoldFrames = 15; // Hold key for 15 frames (~250ms at 60fps)
+    this._keyHoldFrames = 8; // Hold key for 8 frames (~133ms) - short to avoid stickiness
     this._setupKeyboard();
   }
 
