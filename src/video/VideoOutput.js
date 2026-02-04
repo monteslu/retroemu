@@ -28,10 +28,15 @@ export class VideoOutput {
     this.contrast = 1.0; // 1.0 = no change, >1 = more contrast
 
     // Render options (3 independent settings)
-    this.symbols = 'block';  // block, half, ascii, solid, stipple, quad, sextant, octant, braille
+    this.symbols = 'block';  // block, half, ascii, ascii+block, solid, stipple, quad, sextant, octant, braille
     this.colors = 'true';    // true, 256, 16, 2
     this.fgOnly = false;     // foreground color only
     this.dither = false;     // Floyd-Steinberg dithering
+
+    // FPS tracking
+    this.lastFrameTime = 0;
+    this.displayFps = 0;
+    this.fpsSmoothing = 0.9; // Smoothing factor for FPS display
   }
 
   async init() {
@@ -44,7 +49,20 @@ export class VideoOutput {
           resolve();
         } else if (msg.type === 'frame') {
           this.pendingFrame = false;
-          process.stdout.write(`\x1b[H${msg.ansi}`);
+
+          // Calculate display FPS
+          const now = performance.now();
+          if (this.lastFrameTime > 0) {
+            const instantFps = 1000 / (now - this.lastFrameTime);
+            this.displayFps = this.displayFps * this.fpsSmoothing + instantFps * (1 - this.fpsSmoothing);
+          }
+          this.lastFrameTime = now;
+
+          // Render frame, then status line below
+          const termRows = process.stdout.rows || 24;
+          const fps = this.displayFps > 0 ? this.displayFps.toFixed(0) : '--';
+          const statusLine = `\x1b[${termRows - 1};1H\x1b[0m\x1b[36m ${this.nativeWidth}x${this.nativeHeight} -> ${this.termCols}x${this.termRows} | ${fps}fps | ${this.symbols} ${this.colors}${this.fgOnly ? ' fg' : ''}\x1b[K\x1b[0m`;
+          process.stdout.write(`\x1b[H${msg.ansi}${statusLine}`);
         } else if (msg.type === 'error') {
           if (!this.workerReady) {
             reject(new Error(msg.message));
@@ -77,7 +95,7 @@ export class VideoOutput {
   }
 
   setSymbols(symbols) {
-    const validSymbols = ['block', 'half', 'ascii', 'solid', 'stipple', 'quad', 'sextant', 'octant', 'braille'];
+    const validSymbols = ['block', 'half', 'ascii', 'ascii+block', 'solid', 'stipple', 'quad', 'sextant', 'octant', 'braille'];
     this.symbols = validSymbols.includes(symbols) ? symbols : 'block';
   }
 
@@ -123,6 +141,12 @@ export class VideoOutput {
       usedRows = termRows;
       usedCols = Math.floor(termRows * sourceAspect * termCharAspect);
     }
+
+    // Store for status display
+    this.nativeWidth = width;
+    this.nativeHeight = height;
+    this.termCols = usedCols;
+    this.termRows = usedRows;
 
     this.pendingFrame = true;
     this.worker.postMessage({

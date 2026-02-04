@@ -177,8 +177,8 @@ function printUsage() {
   console.log(`  --contrast <n>       Contrast boost, 1.0=normal, 1.5=more contrast (default: 1.0)`);
   console.log(``);
   console.log(`Graphics options:`);
-  console.log(`  --symbols <type>     Symbol set: block, half, ascii, solid, stipple,`);
-  console.log(`                       quad, sextant, octant, braille (default: block)`);
+  console.log(`  --symbols <type>     Symbol set: block, half, ascii, ascii+block, solid,`);
+  console.log(`                       stipple, quad, sextant, octant, braille (default: block)`);
   console.log(`  --colors <mode>      Color mode: true, 256, 16, 2 (default: true)`);
   console.log(`  --fg-only            Foreground color only (black background)`);
   console.log(`  --dither             Enable Floyd-Steinberg dithering`);
