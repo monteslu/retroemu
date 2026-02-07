@@ -22,6 +22,8 @@ let fgOnly = false;
 let dither = false;
 let disableGamepad = false;
 let debugInput = false;
+let videoMode = 'terminal';
+let scale = 2;
 
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--save-dir' && args[i + 1]) {
@@ -38,6 +40,10 @@ for (let i = 0; i < args.length; i++) {
     fgOnly = true;
   } else if (args[i] === '--dither') {
     dither = true;
+  } else if (args[i] === '--video' && args[i + 1]) {
+    videoMode = args[++i];
+  } else if (args[i] === '--scale' && args[i + 1]) {
+    scale = parseInt(args[++i], 10);
   } else if (args[i] === '--no-gamepad') {
     disableGamepad = true;
   } else if (args[i] === '--debug-input') {
@@ -86,7 +92,7 @@ if (!saveDir) {
 }
 
 // Initialize subsystems
-const videoOutput = new VideoOutput();
+const videoOutput = new VideoOutput({ video: videoMode, scale });
 await videoOutput.init();
 videoOutput.setFrameSkip(frameSkip);
 videoOutput.setContrast(contrast);
@@ -177,6 +183,8 @@ function printUsage() {
   console.log(`  --contrast <n>       Contrast boost, 1.0=normal, 1.5=more contrast (default: 1.0)`);
   console.log(``);
   console.log(`Graphics options:`);
+  console.log(`  --video <mode>       Video output: terminal, sdl, both (default: terminal)`);
+  console.log(`  --scale <n>          SDL window scale factor (default: 2)`);
   console.log(`  --symbols <type>     Symbol set: block, half, ascii, solid, stipple,`);
   console.log(`                       quad, sextant, octant, braille (default: block)`);
   console.log(`  --colors <mode>      Color mode: true, 256, 16, 2 (default: true)`);

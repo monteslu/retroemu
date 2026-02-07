@@ -1,6 +1,7 @@
 import { Worker } from 'worker_threads';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import { SDLRenderer } from './SDLRenderer.js';
 import {
   RETRO_PIXEL_FORMAT_0RGB1555,
   RETRO_PIXEL_FORMAT_XRGB8888,
@@ -17,7 +18,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 export class VideoOutput {
-  constructor() {
+  constructor(options = {}) {
     this.worker = null;
     this.workerReady = false;
     this.frameCount = 0;
@@ -32,9 +33,35 @@ export class VideoOutput {
     this.colors = 'true';    // true, 256, 16, 2
     this.fgOnly = false;     // foreground color only
     this.dither = false;     // Floyd-Steinberg dithering
+
+    // Video output mode
+    this.mode = options.video || 'terminal'; // 'terminal' | 'sdl' | 'both'
+    this.scale = options.scale || 2;
+    this.sdlRenderer = null;
+    
+    // For vibe-eyes integration later
+    this.onFrameCallback = options.onFrame || null;
   }
 
-  async init() {
+  async init(width, height) {
+    // Init SDL if requested
+    if (this.mode === 'sdl' || this.mode === 'both') {
+      // We might not know width/height yet if init() is called early
+      // But init() in VideoOutput seems to be async and called before core load?
+      // Wait, width/height come from the core later?
+      // VideoOutput.init() in cli.js is called before host.loadAndStart().
+      // But the core provides geometry info only after loading.
+      // SDL window needs dimensions.
+      // We should probably delay SDL init until first frame or pass geometry separately?
+      
+      // Actually, cli.js calls videoOutput.init() without args.
+      // The worker is initialized there.
+      
+      // We need to lazy-init SDL or update init signature.
+      // The core calls init() or similar?
+      // Let's check LibretroHost.js to see when it knows dimensions.
+    }
+
     return new Promise((resolve, reject) => {
       this.worker = new Worker(join(__dirname, 'videoWorker.js'));
 
@@ -97,49 +124,77 @@ export class VideoOutput {
   onFrame(wasmModule, dataPtr, width, height, pitch, pixelFormat) {
     this.frameCount++;
 
-    if (this.frameCount % this.renderEveryN !== 0) return;
-    if (this.pendingFrame || !this.workerReady) return;
+    // Lazy init SDL renderer on first frame when we know dimensions
+    if (!this.sdlRenderer && (this.mode === 'sdl' || this.mode === 'both')) {
+      this.sdlRenderer = new SDLRenderer({ title: 'retroemu', scale: this.scale });
+      this.sdlRenderer.init(width, height);
+    }
+
+    const renderToTerminal = (this.mode === 'terminal' || this.mode === 'both') && 
+                             (this.frameCount % this.renderEveryN === 0) &&
+                             !this.pendingFrame && this.workerReady;
+                             
+    const renderToSdl = (this.mode === 'sdl' || this.mode === 'both') && this.sdlRenderer;
+
+    if (!renderToTerminal && !renderToSdl) return;
 
     // Convert to RGBA on main thread (known working)
     const rgbaData = this._convertToRGBA(wasmModule, dataPtr, width, height, pitch, pixelFormat);
 
-    const termCols = process.stdout.columns || 80;
-    const termRows = (process.stdout.rows || 24) - 4;
-
-    // Calculate dimensions that preserve display aspect ratio (4:3 for most retro consoles)
-    // Terminal chars are ~2:1 (height:width), so multiply width by 2
-    const sourceAspect = this.displayAspectRatio;
-    const termCharAspect = 2.0;
-
-    let usedCols, usedRows;
-    const rowsNeededForWidth = termCols / (sourceAspect * termCharAspect);
-
-    if (rowsNeededForWidth <= termRows) {
-      // Width-constrained: use full width, calculate height
-      usedCols = termCols;
-      usedRows = Math.floor(rowsNeededForWidth);
-    } else {
-      // Height-constrained: use full height, calculate width
-      usedRows = termRows;
-      usedCols = Math.floor(termRows * sourceAspect * termCharAspect);
+    // SDL Render (Synchronous)
+    if (renderToSdl) {
+      this.sdlRenderer.render(rgbaData, width, height);
+      
+      // Callback for vibe-eyes integration (future)
+      if (this.onFrameCallback) {
+        this.onFrameCallback(rgbaData, width, height);
+      }
     }
 
-    this.pendingFrame = true;
-    this.worker.postMessage({
-      type: 'render',
-      rgbaData: rgbaData.buffer,
-      width,
-      height,
-      termCols: usedCols,
-      termRows: usedRows,
-      contrast: this.contrast,
-      symbols: this.symbols,
-      colors: this.colors,
-      fgOnly: this.fgOnly,
-      dither: this.dither
-    }, [rgbaData.buffer]);
+    // Terminal Render (Async Worker)
+    if (renderToTerminal) {
+      const termCols = process.stdout.columns || 80;
+      const termRows = (process.stdout.rows || 24) - 4;
 
-    this.rgbaBuffer = null; // Need new buffer since we transferred
+      const sourceAspect = this.displayAspectRatio;
+      const termCharAspect = 2.0;
+
+      let usedCols, usedRows;
+      const rowsNeededForWidth = termCols / (sourceAspect * termCharAspect);
+
+      if (rowsNeededForWidth <= termRows) {
+        usedCols = termCols;
+        usedRows = Math.floor(rowsNeededForWidth);
+      } else {
+        usedRows = termRows;
+        usedCols = Math.floor(termRows * sourceAspect * termCharAspect);
+      }
+
+      this.pendingFrame = true;
+      
+      // Only transfer buffer if we are NOT rendering to SDL (which needs it)
+      // If rendering to both, we let the worker clone it (slower but safe)
+      const transferList = renderToSdl ? [] : [rgbaData.buffer];
+      
+      this.worker.postMessage({
+        type: 'render',
+        rgbaData: rgbaData.buffer,
+        width,
+        height,
+        termCols: usedCols,
+        termRows: usedRows,
+        contrast: this.contrast,
+        symbols: this.symbols,
+        colors: this.colors,
+        fgOnly: this.fgOnly,
+        dither: this.dither
+      }, transferList);
+      
+      // If we transferred, we need a new buffer next time
+      if (!renderToSdl) {
+        this.rgbaBuffer = null;
+      }
+    }
   }
 
   _convertToRGBA(wasmModule, dataPtr, width, height, pitch, pixelFormat) {
@@ -220,5 +275,9 @@ export class VideoOutput {
       this.worker = null;
     }
     this.workerReady = false;
+    if (this.sdlRenderer) {
+      this.sdlRenderer.destroy();
+      this.sdlRenderer = null;
+    }
   }
 }
