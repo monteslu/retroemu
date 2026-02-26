@@ -22,6 +22,8 @@ let fgOnly = false;
 let dither = false;
 let disableGamepad = false;
 let debugInput = false;
+let videoMode = 'terminal';  // terminal | sdl | both
+let sdlScale = 2;
 
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--save-dir' && args[i + 1]) {
@@ -42,6 +44,13 @@ for (let i = 0; i < args.length; i++) {
     disableGamepad = true;
   } else if (args[i] === '--debug-input') {
     debugInput = true;
+  } else if (args[i] === '--video' && args[i + 1]) {
+    const mode = args[++i];
+    if (['terminal', 'sdl', 'both'].includes(mode)) {
+      videoMode = mode;
+    }
+  } else if (args[i] === '--scale' && args[i + 1]) {
+    sdlScale = parseInt(args[++i], 10) || 2;
   } else if (args[i] === '--help' || args[i] === '-h') {
     printUsage();
     process.exit(0);
@@ -86,7 +95,7 @@ if (!saveDir) {
 }
 
 // Initialize subsystems
-const videoOutput = new VideoOutput();
+const videoOutput = new VideoOutput({ video: videoMode, scale: sdlScale });
 await videoOutput.init();
 videoOutput.setFrameSkip(frameSkip);
 videoOutput.setContrast(contrast);
@@ -96,7 +105,15 @@ videoOutput.setFgOnly(fgOnly);
 videoOutput.setDither(dither);
 
 const audioBridge = new AudioBridge();
-const inputManager = new InputManager({ disableGamepad, debugInput });
+// NOTE: SDL window must be created (by VideoOutput.init) BEFORE InputManager
+// so that gamepad-node's controller init doesn't break window events
+const sdlInstance = videoOutput.getSDL();
+const inputManager = new InputManager({ disableGamepad, debugInput, sdl: sdlInstance });
+// Register SDL window for keyboard input when SDL video is active
+const sdlWindow = videoOutput.getSDLWindow();
+if (sdlWindow) {
+  inputManager.setSDLWindow(sdlWindow);
+}
 const saveManager = new SaveManager(saveDir);
 
 const host = new LibretroHost({
@@ -106,8 +123,11 @@ const host = new LibretroHost({
   saveManager,
 });
 
-// Enter alternate screen buffer, hide cursor
-process.stdout.write('\x1b[?1049h\x1b[?25l');
+// Enter alternate screen buffer, hide cursor (only for terminal modes)
+const useTerminal = videoMode === 'terminal' || videoMode === 'both';
+if (useTerminal) {
+  process.stdout.write('\x1b[?1049h\x1b[?25l');
+}
 
 // Clean shutdown handler
 let shuttingDown = false;
@@ -123,16 +143,20 @@ async function shutdown() {
     // Ignore SDL controller cleanup errors
   }
 
-  // Restore terminal
-  process.stdout.write('\x1b[?1049l\x1b[?25h');
+  // Restore terminal (only if we modified it)
+  if (useTerminal) {
+    process.stdout.write('\x1b[?1049l\x1b[?25h');
+  }
   process.exit(0);
 }
 
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 process.on('exit', () => {
-  // Ensure terminal is restored even on unexpected exit
-  process.stdout.write('\x1b[?1049l\x1b[?25h');
+  // Ensure terminal is restored even on unexpected exit (only if we modified it)
+  if (useTerminal) {
+    process.stdout.write('\x1b[?1049l\x1b[?25h');
+  }
 });
 
 // Hotkeys via stdin (handled by InputManager, but save/load state needs extra handling)
@@ -161,7 +185,9 @@ if (process.stdin.isTTY) {
 try {
   await host.loadAndStart(romInfo.romPath, { saveDir, romData: romInfo.data });
 } catch (err) {
-  process.stdout.write('\x1b[?1049l\x1b[?25h');
+  if (useTerminal) {
+    process.stdout.write('\x1b[?1049l\x1b[?25h');
+  }
   console.error(`Error: ${err.message}`);
   process.exit(1);
 }
@@ -176,9 +202,13 @@ function printUsage() {
   console.log(`  --frame-skip <n>     Render every Nth frame to terminal (default: 2)`);
   console.log(`  --contrast <n>       Contrast boost, 1.0=normal, 1.5=more contrast (default: 1.0)`);
   console.log(``);
-  console.log(`Graphics options:`);
-  console.log(`  --symbols <type>     Symbol set: block, half, ascii, solid, stipple,`);
-  console.log(`                       quad, sextant, octant, braille (default: block)`);
+  console.log(`Video output:`);
+  console.log(`  --video <mode>       Output mode: terminal, sdl, both (default: terminal)`);
+  console.log(`  --scale <n>          SDL window scale factor (default: 2)`);
+  console.log(``);
+  console.log(`Terminal graphics options:`);
+  console.log(`  --symbols <type>     Symbol set: block, half, ascii, ascii+block, solid,`);
+  console.log(`                       stipple, quad, sextant, octant, braille, matrix (default: block)`);
   console.log(`  --colors <mode>      Color mode: true, 256, 16, 2 (default: true)`);
   console.log(`  --fg-only            Foreground color only (black background)`);
   console.log(`  --dither             Enable Floyd-Steinberg dithering`);

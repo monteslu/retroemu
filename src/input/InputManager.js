@@ -15,7 +15,7 @@ export class InputManager {
   constructor(options = {}) {
     this.disableGamepad = options.disableGamepad || false;
     this.debugInput = options.debugInput || false;
-    this.manager = this.disableGamepad ? null : installNavigatorShim();
+    this.manager = this.disableGamepad ? null : installNavigatorShim({ sdl: options.sdl });
     this.currentGamepads = [];
     this._debugLoggedButtons = new Set(); // Avoid spam
     this._exitComboHeld = 0; // Frames Start+Select held together
@@ -25,7 +25,51 @@ export class InputManager {
     this._keyLastPressed = new Map();
     this._currentFrame = 0;
     this._keyHoldFrames = 8; // Hold key for 8 frames (~133ms) - short to avoid stickiness
+    this._sdlWindow = null;
     this._setupKeyboard();
+  }
+
+  // Register SDL window for keyboard events (when SDL video is active)
+  setSDLWindow(sdlWindow) {
+    if (!sdlWindow) return;
+    this._sdlWindow = sdlWindow;
+
+    // SDL key names to libretro button IDs
+    const sdlKeyMap = {
+      up: 4,       // JOYPAD_UP
+      down: 5,     // JOYPAD_DOWN
+      left: 6,     // JOYPAD_LEFT
+      right: 7,    // JOYPAD_RIGHT
+      z: 0,        // JOYPAD_B (action button)
+      x: 8,        // JOYPAD_A
+      a: 1,        // JOYPAD_Y
+      s: 9,        // JOYPAD_X
+      return: 3,   // JOYPAD_START
+      enter: 3,    // JOYPAD_START (alternate)
+      shift: 2,    // JOYPAD_SELECT
+      q: 10,       // JOYPAD_L
+      w: 11,       // JOYPAD_R
+    };
+
+    sdlWindow.on('keyDown', (e) => {
+      const key = e.key?.toLowerCase();
+
+      // ESC to exit
+      if (key === 'escape') {
+        process.emit('SIGINT');
+        return;
+      }
+      // F1 = reset, F5 = save, F7 = load
+      if (key === 'f1') process.emit('emu:reset');
+      if (key === 'f5') process.emit('emu:save');
+      if (key === 'f7') process.emit('emu:load');
+
+      // Map to libretro button
+      const id = sdlKeyMap[key];
+      if (id !== undefined) {
+        this._keyLastPressed.set(id, this._currentFrame);
+      }
+    });
   }
 
   poll() {

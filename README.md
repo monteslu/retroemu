@@ -159,8 +159,8 @@ Options:
 
 Graphics options:
   --symbols <type>     Symbol set to use for rendering:
-                       block (default), half, ascii, solid, stipple,
-                       quad, sextant, octant, braille
+                       block (default), half, ascii, ascii+block, solid,
+                       stipple, quad, sextant, octant, braille
   --colors <mode>      Color mode: true (default), 256, 16, 2
   --fg-only            Foreground color only (black background)
   --dither             Enable Floyd-Steinberg dithering
@@ -193,6 +193,7 @@ The emulator uses [@monteslu/chafa-wasm](https://github.com/monteslu/chafa-wasm)
 | `block` (default) | Full block characters | ▀ ▄ █ ░ ▒ ▓ |
 | `half` | Vertical half blocks only | ▀ ▄ |
 | `ascii` | ASCII printable characters | @ # % & * |
+| `ascii+block` | ASCII + block characters | @ # █ ▀ ▄ (single-byte friendly) |
 | `solid` | Space + background color only | (chunky but fast) |
 | `stipple` | Shading characters | ░ ▒ ▓ |
 | `quad` | 2x2 quadrant blocks | ▖ ▗ ▘ ▝ ▚ ▞ █ |

@@ -83,9 +83,6 @@ export class LibretroHost {
     }
     this.coreName = system.core;
 
-    console.log(`System: ${system.systemName}`);
-    console.log(`Core: ${system.core}`);
-    console.log(`Loading...`);
 
     // Load the WASM core
     this.core = await loadCore(system.core);
@@ -108,10 +105,6 @@ export class LibretroHost {
     // Read AV info (screen dimensions, FPS, audio sample rate)
     this.systemAVInfo = this._getSystemAVInfo();
     const { geometry, timing } = this.systemAVInfo;
-    console.log(
-      `Video: ${geometry.baseWidth}x${geometry.baseHeight} @ ${timing.fps.toFixed(2)}fps (aspect: ${geometry.aspectRatio.toFixed(3)})`
-    );
-    console.log(`Audio: ${timing.sampleRate}Hz`);
 
     // Set display aspect ratio for correct rendering
     this.videoOutput.setAspectRatio(geometry.aspectRatio);
