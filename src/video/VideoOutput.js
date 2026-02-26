@@ -6,6 +6,7 @@ import {
   RETRO_PIXEL_FORMAT_XRGB8888,
   RETRO_PIXEL_FORMAT_RGB565,
 } from '../constants/libretro.js';
+import { SDLRenderer } from './SDLRenderer.js';
 
 // Pre-computed lookup tables for RGB565 → RGB8 conversion
 const RGB5_TO_8 = new Uint8Array(32);
@@ -17,7 +18,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 export class VideoOutput {
-  constructor() {
+  constructor(options = {}) {
     this.worker = null;
     this.workerReady = false;
     this.frameCount = 0;
@@ -26,6 +27,14 @@ export class VideoOutput {
     this.pendingFrame = false;
     this.displayAspectRatio = 4 / 3; // Default to 4:3, can be set by core
     this.contrast = 1.0; // 1.0 = no change, >1 = more contrast
+
+    // Video output mode: 'terminal' | 'sdl' | 'both'
+    this.mode = options.video || 'terminal';
+    this.sdlScale = options.scale || 2;
+    this.sdlRenderer = null;
+
+    // Callback for frame capture (future vibe-eyes integration)
+    this.onFrameCallback = options.onFrame || null;
 
     // Render options (3 independent settings)
     this.symbols = 'block';  // block, half, ascii, ascii+block, solid, stipple, quad, sextant, octant, braille
@@ -40,6 +49,24 @@ export class VideoOutput {
   }
 
   async init() {
+    // Initialize terminal worker if needed
+    if (this.mode === 'terminal' || this.mode === 'both') {
+      await this._initTerminalWorker();
+    }
+
+    // Initialize SDL window EARLY if SDL mode is enabled
+    // This MUST happen before gamepad-node accesses sdl.controller, or window events break
+    if (this.mode === 'sdl' || this.mode === 'both') {
+      // Use common retro console dimensions as initial size (will adapt on first frame)
+      this.sdlRenderer = new SDLRenderer({
+        title: 'retroemu',
+        scale: this.sdlScale,
+      });
+      this.sdlRenderer.init(256, 224);
+    }
+  }
+
+  async _initTerminalWorker() {
     return new Promise((resolve, reject) => {
       this.worker = new Worker(join(__dirname, 'videoWorker.js'));
 
@@ -61,7 +88,7 @@ export class VideoOutput {
           // Render frame, then status line below
           const termRows = process.stdout.rows || 24;
           const fps = this.displayFps > 0 ? this.displayFps.toFixed(0) : '--';
-          const statusLine = `\x1b[${termRows - 1};1H\x1b[0m\x1b[36m ${this.nativeWidth}x${this.nativeHeight} -> ${this.termCols}x${this.termRows} | ${fps}fps | ${this.symbols} ${this.colors}${this.fgOnly ? ' fg' : ''}\x1b[K\x1b[0m`;
+          const statusLine = `\x1b[${termRows};1H\x1b[0m\x1b[36m ${this.nativeWidth}x${this.nativeHeight} -> ${this.termCols}x${this.termRows} | ${fps}fps | ${this.symbols} ${this.colors}${this.fgOnly ? ' fg' : ''}\x1b[K\x1b[0m`;
           process.stdout.write(`\x1b[H${msg.ansi}${statusLine}`);
         } else if (msg.type === 'error') {
           if (!this.workerReady) {
@@ -95,7 +122,7 @@ export class VideoOutput {
   }
 
   setSymbols(symbols) {
-    const validSymbols = ['block', 'half', 'ascii', 'ascii+block', 'solid', 'stipple', 'quad', 'sextant', 'octant', 'braille'];
+    const validSymbols = ['block', 'half', 'ascii', 'ascii+block', 'solid', 'stipple', 'quad', 'sextant', 'octant', 'braille', 'matrix'];
     this.symbols = validSymbols.includes(symbols) ? symbols : 'block';
   }
 
@@ -115,55 +142,77 @@ export class VideoOutput {
   onFrame(wasmModule, dataPtr, width, height, pitch, pixelFormat) {
     this.frameCount++;
 
-    if (this.frameCount % this.renderEveryN !== 0) return;
-    if (this.pendingFrame || !this.workerReady) return;
+    // For SDL-only mode, render every frame for smoothness
+    // For terminal modes, use frame skip
+    const useTerminal = this.mode === 'terminal' || this.mode === 'both';
+    const useSDL = this.mode === 'sdl' || this.mode === 'both';
 
-    // Convert to RGBA on main thread (known working)
+    // Skip frame check for terminal rendering
+    const skipTerminalFrame = useTerminal && (this.frameCount % this.renderEveryN !== 0);
+    const terminalBusy = useTerminal && (this.pendingFrame || !this.workerReady);
+
+    // If nothing to do this frame, return early
+    if (!useSDL && (skipTerminalFrame || terminalBusy)) return;
+
+    // Convert to RGBA on main thread
     const rgbaData = this._convertToRGBA(wasmModule, dataPtr, width, height, pitch, pixelFormat);
 
-    const termCols = process.stdout.columns || 80;
-    const termRows = (process.stdout.rows || 24) - 4;
-
-    // Calculate dimensions that preserve display aspect ratio (4:3 for most retro consoles)
-    // Terminal chars are ~2:1 (height:width), so multiply width by 2
-    const sourceAspect = this.displayAspectRatio;
-    const termCharAspect = 2.0;
-
-    let usedCols, usedRows;
-    const rowsNeededForWidth = termCols / (sourceAspect * termCharAspect);
-
-    if (rowsNeededForWidth <= termRows) {
-      // Width-constrained: use full width, calculate height
-      usedCols = termCols;
-      usedRows = Math.floor(rowsNeededForWidth);
-    } else {
-      // Height-constrained: use full height, calculate width
-      usedRows = termRows;
-      usedCols = Math.floor(termRows * sourceAspect * termCharAspect);
+    // SDL rendering (every frame for smoothness)
+    if (useSDL && this.sdlRenderer) {
+      this.sdlRenderer.render(rgbaData, width, height);
     }
 
-    // Store for status display
-    this.nativeWidth = width;
-    this.nativeHeight = height;
-    this.termCols = usedCols;
-    this.termRows = usedRows;
+    // Frame callback for external consumers (future vibe-eyes integration)
+    if (this.onFrameCallback) {
+      this.onFrameCallback(rgbaData, width, height);
+    }
 
-    this.pendingFrame = true;
-    this.worker.postMessage({
-      type: 'render',
-      rgbaData: rgbaData.buffer,
-      width,
-      height,
-      termCols: usedCols,
-      termRows: usedRows,
-      contrast: this.contrast,
-      symbols: this.symbols,
-      colors: this.colors,
-      fgOnly: this.fgOnly,
-      dither: this.dither
-    }, [rgbaData.buffer]);
+    // Terminal rendering (with frame skip)
+    if (useTerminal && !skipTerminalFrame && !terminalBusy) {
+      const termCols = process.stdout.columns || 80;
+      const termRows = (process.stdout.rows || 24) - 1;
 
-    this.rgbaBuffer = null; // Need new buffer since we transferred
+      // Calculate dimensions that preserve display aspect ratio (4:3 for most retro consoles)
+      // Terminal chars are ~2:1 (height:width), so multiply width by 2
+      const sourceAspect = this.displayAspectRatio;
+      const termCharAspect = 2.0;
+
+      let usedCols, usedRows;
+      const rowsNeededForWidth = termCols / (sourceAspect * termCharAspect);
+
+      if (rowsNeededForWidth <= termRows) {
+        // Width-constrained: use full width, calculate height
+        usedCols = termCols;
+        usedRows = Math.floor(rowsNeededForWidth);
+      } else {
+        // Height-constrained: use full height, calculate width
+        usedRows = termRows;
+        usedCols = Math.floor(termRows * sourceAspect * termCharAspect);
+      }
+
+      // Store for status display
+      this.nativeWidth = width;
+      this.nativeHeight = height;
+      this.termCols = usedCols;
+      this.termRows = usedRows;
+
+      this.pendingFrame = true;
+      this.worker.postMessage({
+        type: 'render',
+        rgbaData: rgbaData.buffer,
+        width,
+        height,
+        termCols: usedCols,
+        termRows: usedRows,
+        contrast: this.contrast,
+        symbols: this.symbols,
+        colors: this.colors,
+        fgOnly: this.fgOnly,
+        dither: this.dither
+      }, [rgbaData.buffer]);
+
+      this.rgbaBuffer = null; // Need new buffer since we transferred
+    }
   }
 
   _convertToRGBA(wasmModule, dataPtr, width, height, pitch, pixelFormat) {
@@ -238,11 +287,24 @@ export class VideoOutput {
     }
   }
 
+  getSDLWindow() {
+    return this.sdlRenderer?.getWindow() || null;
+  }
+
+  getSDL() {
+    return this.sdlRenderer ? this.sdlRenderer.sdl : null;
+  }
+
   destroy() {
     if (this.worker) {
       this.worker.terminate();
       this.worker = null;
     }
     this.workerReady = false;
+
+    if (this.sdlRenderer) {
+      this.sdlRenderer.destroy();
+      this.sdlRenderer = null;
+    }
   }
 }
