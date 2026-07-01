@@ -799,6 +799,17 @@ function mapJsGamePads() {
   const getPads = _realGetGamepads
     || (typeof navigator !== 'undefined' && typeof navigator.getGamepads === 'function' ? navigator.getGamepads.bind(navigator) : null);
   const w3c = getPads ? getPads() : [];
+  // --debug-input: dump what the REAL SDL pad reports so we can see if buttons register.
+  if (debugInput) {
+    const gp0 = w3c[0];
+    if (gp0 && gp0.connected) {
+      const pressed = gp0.buttons.map((b, i) => (b?.pressed ? i : -1)).filter((i) => i >= 0);
+      const axes = gp0.axes.map((v) => v.toFixed(2)).join(',');
+      console.error(`[jsg-input] realGetGamepads=${!!_realGetGamepads} pad='${gp0.id}' pressed=[${pressed.join(',')}] axes=[${axes}]`);
+    } else {
+      console.error(`[jsg-input] realGetGamepads=${!!_realGetGamepads} pads=${w3c.length} pad0=${gp0 ? 'not-connected' : 'null'}`);
+    }
+  }
   const pads = [];
   for (let i = 0; i < 4; i++) {
     const gp = w3c[i];

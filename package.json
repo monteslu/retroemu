@@ -1,6 +1,6 @@
 {
   "name": "retroemu",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "description": "Terminal retro game emulator using libretro WASM cores",
   "type": "module",
   "main": "index.js",
