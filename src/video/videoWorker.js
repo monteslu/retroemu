@@ -62,7 +62,6 @@ let lastHeight = 0;
 // Current settings
 let lastSymbols = '';
 let lastColors = '';
-let lastFgOnly = false;
 let lastDither = false;
 
 const MATRIX_CHARS = ' ｦｱｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜﾝ0123456789█';
@@ -103,8 +102,9 @@ function addMatrixGlyphs() {
 }
 
 // Build ANSI output directly from canvas cells — only fg colors on black bg.
-// Bypasses chafa's ANSI builder entirely to avoid bg color issues.
-function buildMatrixAnsi(termCols, termRows, colors) {
+// Bypasses chafa's ANSI builder entirely so chafa can still pick good glyphs
+// using full fg+bg, while we strip backgrounds in the final output.
+function buildFgOnlyAnsi(termCols, termRows) {
   let out = '\x1b[48;2;0;0;0m';
   const fgPtr = chafa._malloc(4);
   const bgPtr = chafa._malloc(4);
@@ -118,9 +118,15 @@ function buildMatrixAnsi(termCols, termRows, colors) {
       const fg = chafa.HEAPU8[fgPtr] | (chafa.HEAPU8[fgPtr + 1] << 8) | (chafa.HEAPU8[fgPtr + 2] << 16) | (chafa.HEAPU8[fgPtr + 3] << 24);
 
       if (fg !== lastFg) {
-        const r = (fg >> 16) & 0xFF;
-        const g = (fg >> 8) & 0xFF;
-        const b = fg & 0xFF;
+        let r = (fg >> 16) & 0xFF;
+        let g = (fg >> 8) & 0xFF;
+        let b = fg & 0xFF;
+        // Brightest greens become white (matrix rain tips)
+        if (g >= 252 && r === 0 && b === 0) {
+          const t = (g - 252) / 3; // 0..1 over last 4 shades
+          const wb = (t * 255) | 0;
+          r = wb; b = wb; g = 255;
+        }
         out += `\x1b[38;2;${r};${g};${b}m`;
         lastFg = fg;
       }
@@ -182,7 +188,7 @@ function setupSymbolMap(symbols) {
 
 function setupCanvas(termCols, termRows, symbols, colors, fgOnly, dither) {
   const settingsChanged = symbols !== lastSymbols || colors !== lastColors ||
-                          fgOnly !== lastFgOnly || dither !== lastDither;
+                          dither !== lastDither;
   const sizeChanged = termCols !== lastWidth || termRows !== lastHeight;
 
   if (!settingsChanged && !sizeChanged && canvas) {
@@ -211,9 +217,8 @@ function setupCanvas(termCols, termRows, symbols, colors, fgOnly, dither) {
   chafa._chafa_canvas_config_set_symbol_map(canvasConfig, symbolMap);
   chafa._chafa_canvas_config_set_optimizations(canvasConfig, CHAFA_OPTIMIZATION_ALL);
 
-  if (fgOnly) {
-    chafa._chafa_canvas_config_set_fg_only_enabled(canvasConfig, 1);
-  }
+  // fgOnly is handled at output time via buildFgOnlyAnsi, not here —
+  // letting chafa use full fg+bg produces much better glyph selection.
   if (dither) {
     chafa._chafa_canvas_config_set_dither_mode(canvasConfig, CHAFA_DITHER_MODE_DIFFUSION);
   }
@@ -222,7 +227,6 @@ function setupCanvas(termCols, termRows, symbols, colors, fgOnly, dither) {
 
   lastSymbols = symbols;
   lastColors = colors;
-  lastFgOnly = fgOnly;
   lastDither = dither;
   lastWidth = termCols;
   lastHeight = termRows;
@@ -255,8 +259,8 @@ function renderFrame(rgbaData, width, height, termCols, termRows, contrast, symb
   chafa._chafa_canvas_set_contents_rgba8(canvas, dataPtr, width, height, width * 4);
   chafa._free(dataPtr);
 
-  if (symbols === 'matrix') {
-    return buildMatrixAnsi(termCols, termRows, colors);
+  if (symbols === 'matrix' || fgOnly) {
+    return buildFgOnlyAnsi(termCols, termRows);
   }
 
   const gsPtr = chafa._chafa_canvas_build_ansi(canvas);

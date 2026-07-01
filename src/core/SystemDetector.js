@@ -42,11 +42,11 @@ const EXTENSION_MAP = {
   // Atari Lynx
   '.lnx': { system: 'lynx', core: 'handy' },
   '.o': { system: 'lynx', core: 'handy' },
-  // TurboGrafx-16 / PC Engine
+  // TurboGrafx-16 / PC Engine (HuCard). PCE-CD also uses .cue/.chd, but those are far
+  // more commonly PlayStation discs, so .cue/.chd default to PS1 (below). A PCE-CD .cue
+  // would need an explicit override — the common case wins.
   '.pce': { system: 'pce', core: 'beetle_pce_fast' },
-  '.cue': { system: 'pce', core: 'beetle_pce_fast' },
   '.ccd': { system: 'pce', core: 'beetle_pce_fast' },
-  '.chd': { system: 'pce', core: 'beetle_pce_fast' },
   // Neo Geo Pocket / Color
   '.ngp': { system: 'ngp', core: 'mednafen_ngp' },
   '.ngc': { system: 'ngpc', core: 'mednafen_ngp' },
@@ -67,10 +67,26 @@ const EXTENSION_MAP = {
   '.rom': { system: 'msx', core: 'fmsx' },
   '.dsk': { system: 'msx', core: 'fmsx' },
   '.cas': { system: 'msx', core: 'fmsx' },
-  // PlayStation 1
-  '.iso': { system: 'psx', core: 'pcsx_rearmed' },
-  '.pbp': { system: 'psx', core: 'pcsx_rearmed' },
-  '.m3u': { system: 'psx', core: 'pcsx_rearmed' },
+  // Nintendo 64
+  '.z64': { system: 'n64', core: 'parallel_n64' },
+  '.n64': { system: 'n64', core: 'parallel_n64' },
+  '.v64': { system: 'n64', core: 'parallel_n64' },
+  // PlayStation 1 — .cue/.chd are most commonly PS1 discs (see PCE note above).
+  '.iso': { system: 'psx', core: 'beetle_psx_hw' },
+  '.pbp': { system: 'psx', core: 'beetle_psx_hw' },
+  '.m3u': { system: 'psx', core: 'beetle_psx_hw' },
+  '.cue': { system: 'psx', core: 'beetle_psx_hw' },
+  '.chd': { system: 'psx', core: 'beetle_psx_hw' },
+  // Sega Dreamcast
+  '.gdi': { system: 'dreamcast', core: 'flycast' },
+  '.cdi': { system: 'dreamcast', core: 'flycast' },
+  // GameTank (Clyde Shaffer's open 8-bit console)
+  '.gtr': { system: 'gametank', core: 'gametank' },
+  // WASM Carts
+  '.wasc': { system: 'wasmcart', core: 'wasmcart' },
+  // JS games (run headless via rungame's createHostSession → the terminal/SDL pipeline)
+  '.jsgame': { system: 'jsgame', core: 'jsgame' },
+  '.jsg': { system: 'jsgame', core: 'jsgame' },
 };
 
 const SYSTEM_NAMES = {
@@ -97,7 +113,11 @@ const SYSTEM_NAMES = {
   vectrex: 'Vectrex',
   spectrum: 'ZX Spectrum',
   msx: 'MSX / MSX2',
+  n64: 'Nintendo 64',
   psx: 'PlayStation',
+  gametank: 'GameTank',
+  wasmcart: 'WASM Cart',
+  jsgame: 'JS Game',
 };
 
 export function detectSystem(romPath) {

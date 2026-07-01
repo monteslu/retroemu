@@ -2,6 +2,8 @@ import fs from 'fs/promises';
 import path from 'path';
 import { loadCore } from './CoreLoader.js';
 import { detectSystem } from './SystemDetector.js';
+import { createEmscriptenGLBridge } from './LibretroGLBridge.js';
+import { createWebGL2Context } from 'webgl-node';
 import {
   RETRO_PIXEL_FORMAT_0RGB1555,
   RETRO_PIXEL_FORMAT_XRGB8888,
@@ -9,6 +11,7 @@ import {
   RETRO_ENVIRONMENT_GET_CAN_DUPE,
   RETRO_ENVIRONMENT_SET_MESSAGE,
   RETRO_ENVIRONMENT_SET_PIXEL_FORMAT,
+  RETRO_ENVIRONMENT_SET_HW_RENDER,
   RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY,
   RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY,
   RETRO_ENVIRONMENT_GET_LOG_INTERFACE,
@@ -37,8 +40,10 @@ import {
   RETRO_ENVIRONMENT_SET_ROTATION,
   RETRO_ENVIRONMENT_GET_OVERSCAN,
   RETRO_ENVIRONMENT_SHUTDOWN,
+  RETRO_HW_FRAME_BUFFER_VALID,
   RETRO_DEVICE_JOYPAD,
 } from '../constants/libretro.js';
+import { LibretroGL } from './LibretroGL.js';
 
 export class LibretroHost {
   constructor({ videoOutput, audioBridge, inputManager, saveManager }) {
@@ -66,6 +71,9 @@ export class LibretroHost {
 
     // Frame counter
     this._frameCount = 0;
+
+    // Hardware rendering support
+    this.hwRender = new LibretroGL();
   }
 
   async loadAndStart(romPath, { systemDir, saveDir, romData } = {}) {
@@ -84,8 +92,50 @@ export class LibretroHost {
     this.coreName = system.core;
 
 
+    // For cores that use HW GL rendering, create EGL context and GL bridge
+    // BEFORE loading the core, since GL calls happen during init/load
+    const hwCores = ['mupen64plus_next', 'parallel_n64', 'beetle_psx_hw', 'flycast']; // cores that need GL
+    // Cores with minified glue (built with -flto) use GLctx internally — need fake canvas
+    const canvasCores = ['parallel_n64', 'beetle_psx_hw', 'flycast'];
+    let glBridge = null;
+    let glCanvas = null;
+    this._glContextCreated = false;
+    if (hwCores.includes(system.core)) {
+      if (canvasCores.includes(system.core)) {
+        // Use webgl-node: creates EGL context + WebGL2RenderingContext + mock canvas
+        const { canvas } = createWebGL2Context(640, 480);
+        // Skip Emscripten's Safari WebGL2 workaround which breaks instanceof checks
+        // by pre-setting the flag it checks
+        canvas.getContextSafariWebGL2Fixed = canvas.getContext;
+        glCanvas = canvas;
+        this._glContextCreated = true;
+        console.error(`[libretro] webgl-node context created for ${system.core}`);
+      } else {
+        // Unminified builds: patch WASM GL imports directly
+        const gl = await import('native-gles');
+        gl.default.createContext(640, 480);
+        gl.default.makeCurrent();
+        this._glContextCreated = true;
+        console.error(`[libretro] EGL context created for ${system.core}`);
+
+        let wasmMemory = null;
+        glBridge = createEmscriptenGLBridge(() => wasmMemory);
+        glBridge._setMemory = (mem) => { wasmMemory = mem; };
+      }
+    }
+
     // Load the WASM core
-    this.core = await loadCore(system.core);
+    this.core = await loadCore(system.core, { glBridge, glCanvas });
+
+    // For canvas-based cores, initialize the Emscripten GL context
+    // so that GLctx is set before any GL calls happen
+    if (glCanvas && this.core.GL) {
+      const handle = this.core.GL.createContext(glCanvas, { majorVersion: 2 });
+      if (handle > 0) {
+        this.core.GL.makeContextCurrent(handle);
+        console.error(`[libretro] Emscripten GL context initialized (handle=${handle})`);
+      }
+    }
 
     // Register all libretro callbacks
     this._registerCallbacks();
@@ -105,6 +155,16 @@ export class LibretroHost {
     // Read AV info (screen dimensions, FPS, audio sample rate)
     this.systemAVInfo = this._getSystemAVInfo();
     const { geometry, timing } = this.systemAVInfo;
+
+    // If core requested HW rendering, create FBO (context was already created before loading)
+    if (this.hwRender.active) {
+      const w = geometry.maxWidth || geometry.baseWidth;
+      const h = geometry.maxHeight || geometry.baseHeight;
+      if (!this.hwRender.createContext(w, h, this._glContextCreated)) {
+        throw new Error('Failed to create GL context for HW render');
+      }
+      console.error(`[libretro] HW render active: ${w}x${h}`);
+    }
 
     // Set display aspect ratio for correct rendering
     this.videoOutput.setAspectRatio(geometry.aspectRatio);
@@ -175,6 +235,7 @@ export class LibretroHost {
       this._allocatedStrings = [];
     }
 
+    this.hwRender.destroy();
     this.audioBridge.destroy();
   }
 
@@ -198,6 +259,25 @@ export class LibretroHost {
 
   // --- Private methods ---
 
+  _applyCoreOverrides() {
+    if (this.coreName === 'parallel_n64') {
+      // Force Glide64 for GPU rendering via native-gles
+      const gfxVar = this.coreVariables.get('parallel-n64-gfxplugin');
+      if (gfxVar) {
+        gfxVar.value = 'glide64';
+        console.error('[libretro] Override: gfxplugin = glide64');
+      }
+    }
+    if (this.coreName === 'beetle_psx_hw') {
+      // Force hardware GL renderer
+      const rendererVar = this.coreVariables.get('beetle_psx_hw_renderer');
+      if (rendererVar) {
+        rendererVar.value = 'hardware_gl';
+        console.error('[libretro] Override: renderer = hardware_gl');
+      }
+    }
+  }
+
   _registerCallbacks() {
     const mod = this.core;
 
@@ -208,8 +288,15 @@ export class LibretroHost {
     mod._retro_set_environment(envCb);
 
     // Video refresh: "viiii" → (const void* data, unsigned width, unsigned height, size_t pitch)
+    this._hwFramePending = false;
     const videoCb = mod.addFunction((dataPtr, width, height, pitch) => {
       if (dataPtr === 0) return; // NULL = duplicate frame
+      // HW render: dataPtr == -1 (RETRO_HW_FRAME_BUFFER_VALID)
+      if (this.hwRender.active && (dataPtr === RETRO_HW_FRAME_BUFFER_VALID || dataPtr === -1)) {
+        // Don't readback during retro_run — mark for readback after retro_run returns
+        this._hwFramePending = true;
+        return;
+      }
       this.videoOutput.onFrame(mod, dataPtr, width, height, pitch, this.pixelFormat);
     }, 'viiii');
     mod._retro_set_video_refresh(videoCb);
@@ -256,6 +343,9 @@ export class LibretroHost {
         // Core wants to display a message - accept but we can't display it in terminal easily
         return true;
 
+      case RETRO_ENVIRONMENT_SET_HW_RENDER:
+        return this.hwRender.setup(mod, dataPtr);
+
       case RETRO_ENVIRONMENT_SET_PIXEL_FORMAT: {
         const format = mod.getValue(dataPtr, 'i32');
         if (
@@ -281,11 +371,21 @@ export class LibretroHost {
         return true;
       }
 
-      case RETRO_ENVIRONMENT_GET_LOG_INTERFACE:
-        // Log callback is variadic (like printf) which can't be properly handled
-        // with addFunction's fixed signatures. Return false - cores handle this
-        // gracefully by not logging.
-        return false;
+      case RETRO_ENVIRONMENT_GET_LOG_INTERFACE: {
+        // struct retro_log_callback { retro_log_printf_t log; }
+        // retro_log_printf_t is variadic: void(enum retro_log_level, const char* fmt, ...)
+        // In Emscripten WASM, variadic calls pass args as (level, fmt, va_list_stack_ptr).
+        // We provide a minimal callback that accepts the fixed args and ignores variadics.
+        if (!this._logCbPtr) {
+          this._logCbPtr = mod.addFunction((level, fmtPtr, /* va args ignored */) => {
+            // Optionally log the format string (no vararg expansion)
+            // const fmt = mod.UTF8ToString(fmtPtr);
+            // console.error(`[core:${level}] ${fmt}`);
+          }, 'viii');
+        }
+        mod.setValue(dataPtr, this._logCbPtr, 'i32');
+        return true;
+      }
 
       case RETRO_ENVIRONMENT_SET_VARIABLES: {
         // Core declares its configuration variables
@@ -310,6 +410,7 @@ export class LibretroHost {
           }
           ptr += 8;
         }
+        this._applyCoreOverrides();
         return true;
       }
 
@@ -347,6 +448,7 @@ export class LibretroHost {
       case RETRO_ENVIRONMENT_SET_GEOMETRY:
       case RETRO_ENVIRONMENT_SET_ROTATION:
       case RETRO_ENVIRONMENT_SET_SUPPORT_ACHIEVEMENTS:
+      case 43:  // RETRO_ENVIRONMENT_SET_HW_RENDER_CONTEXT_NEGOTIATION_INTERFACE
         // Accept but ignore these
         return true;
 
@@ -510,6 +612,15 @@ export class LibretroHost {
         lastFrameTime = now - (elapsed % frameDurationMs);
         this.core._retro_run();
         this._frameCount++;
+
+        // HW render readback: after retro_run returns, the GL state is stable
+        if (this._hwFramePending) {
+          this._hwFramePending = false;
+          const frame = this.hwRender.readbackFrame();
+          if (frame) {
+            this.videoOutput.onCartFrameRGBA(frame.pixels, frame.width, frame.height);
+          }
+        }
       }
 
       // Frame pacing: use setTimeout for coarse timing, setImmediate for tight timing

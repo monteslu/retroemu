@@ -26,6 +26,8 @@ export class InputManager {
     this._currentFrame = 0;
     this._keyHoldFrames = 8; // Hold key for 8 frames (~133ms) - short to avoid stickiness
     this._sdlWindow = null;
+    this._rawKeysDown = new Set(); // Raw SDL scancodes currently held
+    this._rawKeysPrev = new Set(); // Previous frame's state
     this._setupKeyboard();
   }
 
@@ -68,6 +70,17 @@ export class InputManager {
       const id = sdlKeyMap[key];
       if (id !== undefined) {
         this._keyLastPressed.set(id, this._currentFrame);
+      }
+
+      // Forward raw scancode for wasmcart keyboard ABI
+      if (e.scancode != null) {
+        this._rawKeysDown.add(e.scancode);
+      }
+    });
+
+    sdlWindow.on('keyUp', (e) => {
+      if (e.scancode != null) {
+        this._rawKeysDown.delete(e.scancode);
       }
     });
   }
@@ -183,6 +196,54 @@ export class InputManager {
     }
 
     return false;
+  }
+
+  // Return wasmcart button bitmask from keyboard state (for port 0)
+  getKeyboardButtons() {
+    // Libretro button ID → wasmcart button bit
+    const LIBRETRO_TO_WC = [
+      /* 0  JOYPAD_B      */ 1 << 0,   // WC_BTN_A
+      /* 1  JOYPAD_Y      */ 1 << 3,   // WC_BTN_Y
+      /* 2  JOYPAD_SELECT */ 1 << 7,   // WC_BTN_SELECT
+      /* 3  JOYPAD_START  */ 1 << 6,   // WC_BTN_START
+      /* 4  JOYPAD_UP     */ 1 << 8,   // WC_BTN_UP
+      /* 5  JOYPAD_DOWN   */ 1 << 9,   // WC_BTN_DOWN
+      /* 6  JOYPAD_LEFT   */ 1 << 10,  // WC_BTN_LEFT
+      /* 7  JOYPAD_RIGHT  */ 1 << 11,  // WC_BTN_RIGHT
+      /* 8  JOYPAD_A      */ 1 << 1,   // WC_BTN_B
+      /* 9  JOYPAD_X      */ 1 << 2,   // WC_BTN_X
+      /* 10 JOYPAD_L      */ 1 << 4,   // WC_BTN_L
+      /* 11 JOYPAD_R      */ 1 << 5,   // WC_BTN_R
+    ];
+    let buttons = 0;
+    for (const [id, lastFrame] of this._keyLastPressed) {
+      if ((this._currentFrame - lastFrame) < this._keyHoldFrames && id < LIBRETRO_TO_WC.length) {
+        buttons |= LIBRETRO_TO_WC[id];
+      }
+    }
+    return buttons;
+  }
+
+  /**
+   * Forward raw keyboard state to CartHost for wasmcart keyboard ABI.
+   * Call this each frame after poll().
+   */
+  updateCartKeyboard(cartHost) {
+    if (!cartHost) return;
+    // Send keyDown for newly pressed keys
+    for (const sc of this._rawKeysDown) {
+      if (!this._rawKeysPrev.has(sc)) {
+        cartHost.keyDown(sc);
+      }
+    }
+    // Send keyUp for released keys
+    for (const sc of this._rawKeysPrev) {
+      if (!this._rawKeysDown.has(sc)) {
+        cartHost.keyUp(sc);
+      }
+    }
+    // Update prev state
+    this._rawKeysPrev = new Set(this._rawKeysDown);
   }
 
   _setupKeyboard() {

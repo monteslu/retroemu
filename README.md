@@ -3,6 +3,8 @@
 Terminal-based retro game emulator. Play classic console games directly in your terminal using libretro WASM cores.
 
 - **25+ retro systems** — NES, SNES, Game Boy, Genesis, Atari, and more
+- **Native game formats** — run [wasmcart](https://github.com/wasmcart/wasmcart) `.wasc` games (WASM, any language) and [jsgame](https://github.com/monteslu/jsgamelauncher) `.jsgame` JS games — rendered right in the terminal like everything else
+- **Multiple video outputs** — terminal (ANSI art), SDL window, or both simultaneously
 - **Truecolor ANSI rendering** — half-block characters for clean pixel art
 - **2100+ controllers supported** — via SDL2 with automatic mapping
 - **Low-latency audio** — direct SDL2 audio output
@@ -25,6 +27,7 @@ The emulator auto-detects systems by file extension. All cores are from the [lib
 | Game Boy | `.gb` | [gambatte](https://github.com/libretro/gambatte-libretro) |
 | Game Boy Color | `.gbc` | [gambatte](https://github.com/libretro/gambatte-libretro) |
 | Game Boy Advance | `.gba` | [mgba](https://github.com/libretro/mgba) |
+| Nintendo 64 | `.z64` `.n64` `.v64` | [parallel-n64](https://github.com/libretro/parallel-n64) |
 
 ### Sega
 
@@ -78,6 +81,18 @@ The emulator auto-detects systems by file extension. All cores are from the [lib
 |--------|----------------|------|
 | ZX Spectrum | `.tzx` `.z80` `.sna` | [fuse](https://github.com/libretro/fuse-libretro) |
 | MSX / MSX2 | `.mx1` `.mx2` `.rom` `.dsk` `.cas` | [fmsx](https://github.com/libretro/fmsx-libretro) |
+
+### Native Game Formats
+
+Beyond emulated consoles, retroemu runs two *native* game formats — real WASM/JS games (not
+emulation). They render into the same terminal (ANSI art) / SDL pipeline as every emulated system.
+
+| Format | Extensions | Runtime | Description |
+|--------|------------|---------|-------------|
+| wasmcart | `.wasm` `.wasc` | [wasmcart](https://github.com/wasmcart/wasmcart) (2026) | Standalone WASM games — compile from any language to the wasmcart ABI. Software rendering or GPU-accelerated (OpenGL ES 3.0). |
+| jsgame | `.jsgame` `.jsg` | [rungame](https://www.npmjs.com/package/rungame) (2024) | JavaScript games (canvas / WebGL) run in a sandboxed realm. retroemu drives them headless and renders the frames itself. |
+
+GL carts (those importing from the `gl` WASM module) are automatically detected. retroemu creates an EGL context via [native-gles](../native-gles/) and provides GPU-accelerated rendering. The GL output is read back via `glReadPixels` for terminal display, or rendered directly to an SDL window.
 
 Just run `retroemu <rom-file>` and the correct core loads automatically based on the file extension.
 
@@ -157,10 +172,14 @@ Options:
   --frame-skip <n>     Render every Nth frame to terminal (default: 2)
   --contrast <n>       Contrast boost, 1.0=normal, 1.5+=enhanced (default: 1.0)
 
-Graphics options:
+Video output:
+  --video <mode>       Output mode: terminal (default), sdl, both
+  --scale <n>          SDL window scale factor (default: 2)
+
+Terminal graphics options:
   --symbols <type>     Symbol set to use for rendering:
                        block (default), half, ascii, ascii+block, solid,
-                       stipple, quad, sextant, octant, braille
+                       stipple, quad, sextant, octant, braille, matrix
   --colors <mode>      Color mode: true (default), 256, 16, 2
   --fg-only            Foreground color only (black background)
   --dither             Enable Floyd-Steinberg dithering
@@ -175,11 +194,17 @@ Examples:
 ```bash
 retroemu ~/roms/my_game.nes
 retroemu ~/roms/my_game.zip            # extracts ROM from ZIP automatically
+retroemu --video sdl ~/roms/my_game.nes              # SDL window instead of terminal
+retroemu --video both ~/roms/my_game.nes             # terminal + SDL window
 retroemu --frame-skip 3 ~/roms/my_game.sfc
 retroemu --save-dir ~/.emu/saves ~/roms/my_game.gbc
-retroemu --contrast 1.5 ~/roms/my_game.a26             # boost contrast for dark games
+retroemu --contrast 1.5 ~/roms/my_game.a26           # boost contrast for dark games
 retroemu --symbols braille --colors 2 ~/roms/my_game.gb   # monochrome braille
 retroemu --symbols ascii --fg-only ~/roms/my_game.nes     # ASCII on black background
+
+# WASM carts (software rendering or GL-accelerated)
+retroemu my_cart.wasm                                # software cart in terminal
+retroemu --video sdl my_game.wasc                    # GL cart in SDL window
 ```
 
 ## Rendering
@@ -276,17 +301,21 @@ Default save directory: `saves/` next to the ROM file, configurable with `--save
 
 ```
 retroemu/
-  bin/cli.js                    CLI entry point
+  bin/cli.js                    CLI entry point (libretro cores + wasmcart runner + GL pre-scan)
   index.js                      Library exports
   src/
     core/
       LibretroHost.js           Main engine: WASM loading, callback registration, frame loop
       CoreLoader.js             Dynamic import of Emscripten WASM modules
+      LibretroGL.js             HW render support (SET_HW_RENDER, FBO readback, context lifecycle)
+      LibretroGLBridge.js       Emscripten GL env imports → native-gles bridge (541 functions)
       SystemDetector.js         ROM extension -> system/core mapping
       SaveManager.js            SRAM and save state persistence
+      RomLoader.js              ROM loading + ZIP extraction
     video/
-      VideoOutput.js            Pixel format conversion, aspect ratio, contrast
-      videoWorker.js            Worker thread for chafa-wasm rendering
+      VideoOutput.js            Pixel format conversion, aspect ratio, terminal/SDL/both modes
+      SDLRenderer.js            SDL2 window rendering with aspect ratio preservation
+      videoWorker.js            Worker thread for chafa-wasm terminal rendering
     audio/
       AudioBridge.js            Direct SDL2 audio output
     input/
@@ -300,6 +329,45 @@ retroemu/
     build-all-cores.sh          Batch build
     cores/*.sh                  Per-core build configs
 ```
+
+### WASM Cart Runner
+
+When a `.wasm` or `.wasc` file is loaded, retroemu uses [wasmcart](../wasmcart/) instead of libretro:
+
+```
+ retroemu <cart.wasc>
+   │
+   CartHost  ── loads WASM cart, provides asset API + GL backend, drives wc_render() at 60fps
+   │
+   cart.wc_render()
+     │
+     ├── [GL carts] glClear/glDraw* ──► native-gles ──► EGL pbuffer ──► glReadPixels ──► SDL/chafa
+     ├── [SW carts] write to XRGB framebuffer ──► VideoOutput ──► SDL/chafa
+     ├── read pads[] ──► InputManager.poll() ──► navigator.getGamepads()
+     └── write audio_ring[] ──► AudioBridge ──► SDL2 ──► speakers
+```
+
+For GL carts, the readback pipeline is: `glFinish()` → `glReadPixels(RGBA)` → vertical flip → RGBA→XRGB → display. At 320x240 this adds ~3.5ms per frame.
+
+### GPU-Accelerated Libretro Cores (N64)
+
+Some libretro cores use hardware-accelerated GPU rendering via `RETRO_ENVIRONMENT_SET_HW_RENDER`. retroemu supports this using [webgl-node](../webgl-node/) to provide a WebGL2 context backed by [native-gles](../native-gles/).
+
+```
+ retroemu <rom.z64>
+   │
+   LibretroHost  ── creates WebGL2 context via webgl-node, initializes Emscripten GL
+   │
+   core._retro_run()
+     │
+     ├── GL draw calls ──► Emscripten GLctx ──► webgl-node ──► native-gles EGL pbuffer
+     └── video_refresh(RETRO_HW_FRAME_BUFFER_VALID)
+   │
+   after retro_run():
+     glFinish() → glReadPixels(FBO 0) → vertical flip → onCartFrameRGBA → SDL/chafa
+```
+
+The N64 core (parallel-n64) uses the Glide64 GPU plugin — the same one used by [N64Wasm](https://github.com/nicholasgasior/nicholasgasior.github.io) for full-speed browser N64 emulation.
 
 ### Key Modules
 
@@ -350,7 +418,7 @@ retroemu/
 3. Links the output with `emcc` using flags:
    - `-O3` — full optimization
    - `-s MODULARIZE=1 -s EXPORT_ES6=1` — ES module factory
-   - `-s ENVIRONMENT=node` — Node.js target
+   - `-s ENVIRONMENT=node` — Node.js target (GPU cores use `node,web` for WebGL context support)
    - `-s ALLOW_MEMORY_GROWTH=1` — dynamic memory (32MB initial, 256MB max)
    - `-s ALLOW_TABLE_GROWTH=1` — required for `addFunction()` callback registration
    - `-s FILESYSTEM=0` — no Emscripten FS (host handles I/O)
@@ -389,8 +457,11 @@ await host.shutdown();
 | Package | Purpose |
 |---------|---------|
 | [gamepad-node](../gamepad-node/) | W3C Gamepad API for Node.js via SDL2 — 2100+ controllers with standard mapping |
-| [@kmamal/sdl](https://github.com/kmamal/node-sdl) | Native SDL2 bindings for Node.js — audio output and gamepad input |
+| [@kmamal/sdl](https://github.com/kmamal/node-sdl) | Native SDL2 bindings for Node.js — audio output, SDL window rendering, gamepad input |
 | [chafa-wasm](https://github.com/nicholasgasior/chafa-wasm) | Image-to-ANSI conversion — auto-detects Sixel, Kitty, or Unicode block art |
+| [wasmcart](../wasmcart/) | WASM cart host — loads .wasm/.wasc carts, provides ABI (input, audio, assets, GL) |
+| [native-gles](../native-gles/) | OpenGL ES 3.0 Node.js addon — EGL pbuffer context + ~100 GL function bindings |
+| [webgl-node](../webgl-node/) | WebGL2 context for Node.js — provides canvas + WebGL2RenderingContext backed by native-gles |
 
 ## Acknowledgments
 

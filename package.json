@@ -1,6 +1,6 @@
 {
   "name": "retroemu",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Terminal retro game emulator using libretro WASM cores",
   "type": "module",
   "main": "index.js",
@@ -44,6 +44,14 @@
     "@kmamal/sdl": "^0.11.13",
     "@monteslu/chafa-wasm": "^0.4.0",
     "gamepad-node": "^1.4.0",
+    "native-gles": "file:../native-gles",
+    "romdev-audio-resampler": "^0.1.0",
+    "romdev-core-beetle-psx-hw": "file:../romdev/packages/romdev-core-beetle-psx-hw",
+    "romdev-core-gametank": "file:../romdev/packages/romdev-core-gametank",
+    "romdev-core-parallel-n64": "file:../romdev/packages/romdev-core-parallel-n64",
+    "rungame": "^0.13.0",
+    "wasmcart": "^0.3.0",
+    "webgl-node": "file:../webgl-node",
     "yauzl": "^3.2.0"
   },
   "devDependencies": {

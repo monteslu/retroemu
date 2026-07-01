@@ -16,7 +16,6 @@ These systems have larger/more complex cores that may need additional work:
 ## Other Potential Additions
 
 - **Arcade** (FinalBurn Neo / MAME) - Complex, ROM sets are large
-- **Nintendo 64** (mupen64plus / parallel-n64) - Very heavy, may not work well in WASM
 - **Sega Saturn** (mednafen_saturn / yabause) - Heavy, needs BIOS
 - **3DO** (opera) - Needs BIOS
 - **Jaguar** (virtualjaguar) - Atari's 64-bit console

@@ -103,6 +103,21 @@ export class SaveManager {
     }
   }
 
+  async writeCartSave(cartName, data) {
+    const savePath = path.join(this.saveDir, `${cartName}.sav`);
+    await fs.mkdir(path.dirname(savePath), { recursive: true });
+    await fs.writeFile(savePath, data);
+  }
+
+  async readCartSave(cartName) {
+    const savePath = path.join(this.saveDir, `${cartName}.sav`);
+    try {
+      return await fs.readFile(savePath);
+    } catch {
+      return null;
+    }
+  }
+
   _sramPath(romPath) {
     const name = path.basename(romPath, path.extname(romPath));
     return path.join(this.saveDir, `${name}.srm`);

@@ -31,7 +31,12 @@ export class VideoOutput {
     // Video output mode: 'terminal' | 'sdl' | 'both'
     this.mode = options.video || 'terminal';
     this.sdlScale = options.scale || 2;
+    this.sdlAccelerated = options.accelerated !== false; // default true
     this.sdlRenderer = null;
+    this.initWidth = options.initWidth || 0;
+    this.initHeight = options.initHeight || 0;
+    this.fullscreen = !!options.fullscreen;
+    this.opengl = !!options.opengl;
 
     // Callback for frame capture (future vibe-eyes integration)
     this.onFrameCallback = options.onFrame || null;
@@ -61,8 +66,11 @@ export class VideoOutput {
       this.sdlRenderer = new SDLRenderer({
         title: 'retroemu',
         scale: this.sdlScale,
+        accelerated: this.sdlAccelerated,
+        fullscreen: this.fullscreen,
+        opengl: this.opengl,
       });
-      this.sdlRenderer.init(256, 224);
+      this.sdlRenderer.init(this.initWidth || 256, this.initHeight || 224);
     }
   }
 
@@ -115,6 +123,12 @@ export class VideoOutput {
 
   setAspectRatio(ratio) {
     this.displayAspectRatio = ratio > 0 ? ratio : 4 / 3;
+  }
+
+  resizeWindow(width, height) {
+    if (this.sdlRenderer) {
+      this.sdlRenderer.resizeWindow(width, height);
+    }
   }
 
   setContrast(value) {
@@ -212,6 +226,149 @@ export class VideoOutput {
       }, [rgbaData.buffer]);
 
       this.rgbaBuffer = null; // Need new buffer since we transferred
+    }
+  }
+
+  // Render a frame from RGBA Uint8Array (used by GL carts)
+  onCartFrameRGBA(rgbaBuffer, width, height) {
+    this.frameCount++;
+
+    const useTerminal = this.mode === 'terminal' || this.mode === 'both';
+    const useSDL = this.mode === 'sdl' || this.mode === 'both';
+
+    const skipTerminalFrame = useTerminal && (this.frameCount % this.renderEveryN !== 0);
+    const terminalBusy = useTerminal && (this.pendingFrame || !this.workerReady);
+
+    if (!useSDL && (skipTerminalFrame || terminalBusy)) return;
+
+    if (useSDL && this.sdlRenderer) {
+      this.sdlRenderer.renderRaw(rgbaBuffer, width, height, 'rgba32');
+    }
+
+    if (this.onFrameCallback) {
+      this.onFrameCallback(rgbaBuffer, width, height);
+    }
+
+    if (useTerminal && !skipTerminalFrame && !terminalBusy) {
+      const rgbaData = new Uint8ClampedArray(rgbaBuffer.buffer, rgbaBuffer.byteOffset, rgbaBuffer.byteLength);
+      const termCols = process.stdout.columns || 80;
+      const termRows = (process.stdout.rows || 24) - 1;
+
+      const sourceAspect = this.displayAspectRatio;
+      const termCharAspect = 2.0;
+
+      let usedCols, usedRows;
+      const rowsNeededForWidth = termCols / (sourceAspect * termCharAspect);
+
+      if (rowsNeededForWidth <= termRows) {
+        usedCols = termCols;
+        usedRows = Math.floor(rowsNeededForWidth);
+      } else {
+        usedRows = termRows;
+        usedCols = Math.floor(termRows * sourceAspect * termCharAspect);
+      }
+
+      this.nativeWidth = width;
+      this.nativeHeight = height;
+      this.termCols = usedCols;
+      this.termRows = usedRows;
+
+      this.pendingFrame = true;
+      this.worker.postMessage({
+        type: 'render',
+        rgbaData: rgbaData.buffer,
+        width,
+        height,
+        termCols: usedCols,
+        termRows: usedRows,
+        contrast: this.contrast,
+        symbols: this.symbols,
+        colors: this.colors,
+        fgOnly: this.fgOnly,
+        dither: this.dither
+      }, [rgbaData.buffer]);
+    }
+  }
+
+  // Render a frame from a raw XRGB8888 Uint8Array (used by wasmcart)
+  onCartFrame(xrgbBuffer, width, height) {
+    this.frameCount++;
+
+    const useTerminal = this.mode === 'terminal' || this.mode === 'both';
+    const useSDL = this.mode === 'sdl' || this.mode === 'both';
+
+    const skipTerminalFrame = useTerminal && (this.frameCount % this.renderEveryN !== 0);
+    const terminalBusy = useTerminal && (this.pendingFrame || !this.workerReady);
+
+    if (!useSDL && (skipTerminalFrame || terminalBusy)) return;
+
+    // SDL can render XRGB8888 directly as 'bgrx8888' — no pixel conversion needed
+    if (useSDL && this.sdlRenderer && !useTerminal) {
+      this.sdlRenderer.renderRaw(xrgbBuffer, width, height, 'argb8888');
+      if (this.onFrameCallback) {
+        this.onFrameCallback(xrgbBuffer, width, height);
+      }
+      return;
+    }
+
+    // Terminal mode needs RGBA conversion
+    const totalPixels = width * height;
+    const needed = totalPixels * 4;
+    const rgbaData = new Uint8ClampedArray(needed);
+    for (let i = 0; i < totalPixels; i++) {
+      const si = i * 4;
+      // XRGB8888 in memory (little-endian u32): byte0=B, byte1=G, byte2=R, byte3=X
+      rgbaData[si]     = xrgbBuffer[si + 2]; // R
+      rgbaData[si + 1] = xrgbBuffer[si + 1]; // G
+      rgbaData[si + 2] = xrgbBuffer[si];     // B
+      rgbaData[si + 3] = 255;                // A
+    }
+
+    if (useSDL && this.sdlRenderer) {
+      this.sdlRenderer.render(rgbaData, width, height);
+    }
+
+    if (this.onFrameCallback) {
+      this.onFrameCallback(rgbaData, width, height);
+    }
+
+    if (useTerminal && !skipTerminalFrame && !terminalBusy) {
+      const termCols = process.stdout.columns || 80;
+      const termRows = (process.stdout.rows || 24) - 1;
+
+      const sourceAspect = this.displayAspectRatio;
+      const termCharAspect = 2.0;
+
+      let usedCols, usedRows;
+      const rowsNeededForWidth = termCols / (sourceAspect * termCharAspect);
+
+      if (rowsNeededForWidth <= termRows) {
+        usedCols = termCols;
+        usedRows = Math.floor(rowsNeededForWidth);
+      } else {
+        usedRows = termRows;
+        usedCols = Math.floor(termRows * sourceAspect * termCharAspect);
+      }
+
+      this.nativeWidth = width;
+      this.nativeHeight = height;
+      this.termCols = usedCols;
+      this.termRows = usedRows;
+
+      this.pendingFrame = true;
+      this.worker.postMessage({
+        type: 'render',
+        rgbaData: rgbaData.buffer,
+        width,
+        height,
+        termCols: usedCols,
+        termRows: usedRows,
+        contrast: this.contrast,
+        symbols: this.symbols,
+        colors: this.colors,
+        fgOnly: this.fgOnly,
+        dither: this.dither
+      }, [rgbaData.buffer]);
     }
   }
 

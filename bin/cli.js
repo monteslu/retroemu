@@ -1,7 +1,24 @@
-#!/usr/bin/env node
+#!/usr/bin/env -S node --experimental-wasm-exnref
+
+// Self-re-exec with --experimental-vm-modules if it's missing. jsgame (.jsgame) runs via
+// rungame, whose sandbox realm uses vm.SourceTextModule (needs that flag). Harmless for
+// every other system, and it survives being spawned WITHOUT the shebang (e.g. by retroterm
+// via `spawn(node, [cli.js, …])`). Sentinel env var guards against a re-exec loop.
+if (
+  !process.execArgv.some((a) => a.includes('experimental-vm-modules')) &&
+  !process.env.RETROEMU_REEXEChild
+) {
+  const { spawnSync } = await import('node:child_process');
+  const r = spawnSync(
+    process.execPath,
+    ['--experimental-vm-modules', ...process.execArgv, process.argv[1], ...process.argv.slice(2)],
+    { stdio: 'inherit', env: { ...process.env, RETROEMU_REEXEChild: '1' } },
+  );
+  process.exit(r.status ?? 0);
+}
 
 import { resolve, dirname, basename } from 'path';
-import { existsSync } from 'fs';
+import { existsSync, writeFileSync } from 'fs';
 import { LibretroHost } from '../src/core/LibretroHost.js';
 import { VideoOutput } from '../src/video/VideoOutput.js';
 import { AudioBridge } from '../src/audio/AudioBridge.js';
@@ -9,6 +26,10 @@ import { InputManager } from '../src/input/InputManager.js';
 import { SaveManager } from '../src/core/SaveManager.js';
 import { detectSystem, getSupportedExtensions } from '../src/core/SystemDetector.js';
 import { loadRom, isZipFile } from '../src/core/RomLoader.js';
+import { CartHost, BUTTON } from 'wasmcart';
+import { createHostSession as createJsGameSession } from 'rungame';
+import gl from 'native-gles';
+import { WebGL2RenderingContext } from 'webgl-node';
 
 // Parse arguments
 const args = process.argv.slice(2);
@@ -20,10 +41,15 @@ let symbols = 'block';
 let colors = 'true';
 let fgOnly = false;
 let dither = false;
+let termFps = 30;
 let disableGamepad = false;
 let debugInput = false;
 let videoMode = 'terminal';  // terminal | sdl | both
-let sdlScale = 2;
+let sdlScale = 1;
+let preferredWidth = 0;   // 0 = no preference (cart chooses)
+let preferredHeight = 0;
+let fullscreen = false;
+let uncapped = false;
 
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--save-dir' && args[i + 1]) {
@@ -40,6 +66,8 @@ for (let i = 0; i < args.length; i++) {
     fgOnly = true;
   } else if (args[i] === '--dither') {
     dither = true;
+  } else if (args[i] === '--term-fps' && args[i + 1]) {
+    termFps = parseInt(args[++i], 10) || 30;
   } else if (args[i] === '--no-gamepad') {
     disableGamepad = true;
   } else if (args[i] === '--debug-input') {
@@ -51,6 +79,14 @@ for (let i = 0; i < args.length; i++) {
     }
   } else if (args[i] === '--scale' && args[i + 1]) {
     sdlScale = parseInt(args[++i], 10) || 2;
+  } else if (args[i] === '--res' && args[i + 1]) {
+    const parts = args[++i].split('x');
+    preferredWidth = parseInt(parts[0], 10) || 0;
+    preferredHeight = parseInt(parts[1], 10) || 0;
+  } else if (args[i] === '--fullscreen' || args[i] === '-f') {
+    fullscreen = true;
+  } else if (args[i] === '--uncapped') {
+    uncapped = true;
   } else if (args[i] === '--help' || args[i] === '-h') {
     printUsage();
     process.exit(0);
@@ -69,34 +105,306 @@ if (!existsSync(romPath)) {
   process.exit(1);
 }
 
-// Load ROM (handles ZIP extraction if needed)
+// Load ROM (handles ZIP extraction if needed) — then detect system from actual ROM extension
 let romInfo;
-try {
-  romInfo = await loadRom(romPath);
-  if (romInfo.zipEntry) {
-    console.log(`Extracted: ${romInfo.zipEntry}`);
+let system;
+
+if (isZipFile(romPath)) {
+  try {
+    romInfo = await loadRom(romPath);
+    if (romInfo.zipEntry) {
+      console.log(`Extracted: ${romInfo.zipEntry}`);
+    }
+    system = detectSystem(romInfo.romPath);
+  } catch (err) {
+    console.error(`Error loading ROM: ${err.message}`);
+    process.exit(1);
   }
-} catch (err) {
-  console.error(`Error loading ROM: ${err.message}`);
-  process.exit(1);
+} else {
+  // Load ROM data (also handles .bin magic byte detection for N64, etc.)
+  try {
+    romInfo = await loadRom(romPath);
+  } catch (err) {
+    console.error(`Error loading ROM: ${err.message}`);
+    process.exit(1);
+  }
+  system = detectSystem(romInfo.romPath);
 }
 
-// Detect system from the actual ROM file (inside ZIP if applicable)
-const system = detectSystem(romInfo.romPath);
 if (!system) {
-  console.error(`Unsupported ROM file extension.`);
+  console.error(`Unsupported file extension.`);
   console.error(`Supported: ${getSupportedExtensions().join(', ')}`);
   process.exit(1);
 }
+
+const isCart = system.system === 'wasmcart';
+const isJsGame = system.system === 'jsgame';
 
 // Default save dir is alongside the original file (ZIP or ROM)
 if (!saveDir) {
   saveDir = resolve(dirname(romPath), 'saves');
 }
 
+// Pre-scan cart for GL usage — must create EGL context BEFORE SDL init
+// (SDL's accelerated renderer conflicts with our EGL context on the same thread)
+let cartUsesGL = false;
+let glUseWindowSurface = false;
+let glNoFBORedirect = false;
+let cartManagesFBOs = false;
+if (isCart) {
+  const { readFile } = await import('fs/promises');
+  let wasmBytes = await readFile(romPath);
+
+  // If it's a .wasc (ZIP), extract cart.wasm for the pre-scan
+  if (wasmBytes[0] === 0x50 && wasmBytes[1] === 0x4b) {
+    const { inflateRawSync } = await import('zlib');
+    // Quick ZIP parse: find cart.wasm entry
+    // Read EOCD to get central directory
+    let eocd = -1;
+    for (let i = wasmBytes.length - 22; i >= Math.max(0, wasmBytes.length - 65558); i--) {
+      if (wasmBytes[i] === 0x50 && wasmBytes[i+1] === 0x4b && wasmBytes[i+2] === 0x05 && wasmBytes[i+3] === 0x06) {
+        eocd = i; break;
+      }
+    }
+    if (eocd >= 0) {
+      const dv = new DataView(wasmBytes.buffer, wasmBytes.byteOffset);
+      const cdOff = dv.getUint32(eocd + 16, true);
+      const cdCount = dv.getUint16(eocd + 10, true);
+      // First parse manifest to find entry name
+      let entryName = 'cart.wasm';
+      let pos = cdOff;
+      for (let i = 0; i < cdCount; i++) {
+        const nameLen = dv.getUint16(pos + 28, true);
+        const extraLen = dv.getUint16(pos + 30, true);
+        const commentLen = dv.getUint16(pos + 32, true);
+        const name = new TextDecoder().decode(wasmBytes.subarray(pos + 46, pos + 46 + nameLen));
+        if (name === 'manifest.json') {
+          const localOff = dv.getUint32(pos + 42, true);
+          const lnLen = dv.getUint16(localOff + 26, true);
+          const leLen = dv.getUint16(localOff + 28, true);
+          const dataOff = localOff + 30 + lnLen + leLen;
+          const comp = dv.getUint16(pos + 10, true);
+          const compSize = dv.getUint32(pos + 20, true);
+          let mData = wasmBytes.subarray(dataOff, dataOff + compSize);
+          if (comp === 8) mData = inflateRawSync(mData);
+          const manifest = JSON.parse(new TextDecoder().decode(mData));
+          if (manifest.entry) entryName = manifest.entry;
+        }
+        pos += 46 + nameLen + extraLen + commentLen;
+      }
+      // Now find the WASM entry
+      pos = cdOff;
+      for (let i = 0; i < cdCount; i++) {
+        const nameLen = dv.getUint16(pos + 28, true);
+        const extraLen = dv.getUint16(pos + 30, true);
+        const commentLen = dv.getUint16(pos + 32, true);
+        const name = new TextDecoder().decode(wasmBytes.subarray(pos + 46, pos + 46 + nameLen));
+        if (name === entryName) {
+          const localOff = dv.getUint32(pos + 42, true);
+          const lnLen = dv.getUint16(localOff + 26, true);
+          const leLen = dv.getUint16(localOff + 28, true);
+          const dataOff = localOff + 30 + lnLen + leLen;
+          const comp = dv.getUint16(pos + 10, true);
+          const compSize = dv.getUint32(pos + 20, true);
+          wasmBytes = wasmBytes.subarray(dataOff, dataOff + compSize);
+          if (comp === 8) wasmBytes = inflateRawSync(wasmBytes);
+          break;
+        }
+        pos += 46 + nameLen + extraLen + commentLen;
+      }
+    }
+  }
+
+  let wasmModule;
+  try {
+    wasmModule = await WebAssembly.compile(wasmBytes);
+  } catch (e) {
+    // Fallback for carts using features like exnref that need flags
+    // Skip pre-scan, let CartHost handle compilation
+    wasmModule = null;
+    console.error(`[warn] Pre-compile failed (${e.message}), skipping import scan`);
+  }
+  // Detect GL carts: imports from 'gl' module, or GL functions under 'env' (emscripten-style)
+  const wasmImports = wasmModule ? WebAssembly.Module.imports(wasmModule) : [];
+  // Any cart with GL imports uses GL. With gpu_api=1, even 2D carts render
+  // through GL blit (texture upload + fullscreen quad). One display path for all carts.
+  const hasGLImports = wasmImports.some(i =>
+    i.module === 'gl' || (i.module === 'env' && i.kind === 'function' && i.name.startsWith('gl') && /^gl[A-Z]/.test(i.name)));
+  cartUsesGL = hasGLImports || !wasmModule; // assume GL if pre-scan failed
+  // Detect if cart manages its own FBOs (imports glGenFramebuffers)
+  cartManagesFBOs = wasmImports.some(i =>
+    (i.module === 'gl' || i.module === 'env') && i.kind === 'function' && i.name === 'glGenFramebuffers');
+  // For SDL-only GL carts, defer context creation until after SDL window exists
+  // so we can use the window surface (zero-copy) instead of pbuffer (readPixels)
+  glUseWindowSurface = cartUsesGL && videoMode === 'sdl';
+  if (cartUsesGL && !glUseWindowSurface) {
+    const initW = preferredWidth || 320;
+    const initH = preferredHeight || 240;
+    if (!gl.createContext(initW, initH)) {
+      console.error('Failed to create GL context');
+      process.exit(1);
+    }
+  }
+}
+
 // Initialize subsystems
-const videoOutput = new VideoOutput({ video: videoMode, scale: sdlScale });
+// GL carts and HW-rendered libretro cores need software SDL renderer (accelerated renderer conflicts with EGL context)
+// Exception: window surface mode uses SDL's opengl window directly
+// Window surface GL carts: scale=1 since EGL surface matches native window pixels (not SDL scaled)
+const hwLibretroCores = ['mupen64plus_next', 'parallel_n64'];
+const needsGL = cartUsesGL || (system && hwLibretroCores.includes(system.core));
+const videoOutput = new VideoOutput({ video: videoMode, scale: glUseWindowSurface ? 1 : sdlScale, accelerated: !needsGL || glUseWindowSurface, initWidth: preferredWidth, initHeight: preferredHeight, fullscreen, opengl: glUseWindowSurface });
 await videoOutput.init();
+
+// For SDL-only GL carts, create EGL context using the SDL window's native handle
+// Cart renders to FBO at its native resolution; we blit to window surface with letterboxing
+let glSurfaceW = 0;  // current window surface size (updates on resize)
+let glSurfaceH = 0;
+let glFBOW = 0;      // FBO size (fixed at cart resolution)
+let glFBOH = 0;
+let glFBO = 0;
+if (glUseWindowSurface) {
+  const sdlWindow = videoOutput.getSDLWindow();
+  const nativeGL = sdlWindow.native?.gl;
+  if (!nativeGL) {
+    console.error('SDL window has no native GL handle');
+    process.exit(1);
+  }
+  glSurfaceW = sdlWindow.width;
+  glSurfaceH = sdlWindow.height;
+  if (!gl.createContext(glSurfaceW, glSurfaceH, { nativeWindow: nativeGL })) {
+    console.error('Failed to create GL window surface context');
+    process.exit(1);
+  }
+  // Disable vsync — our game loop handles frame pacing
+  if (gl.setSwapInterval) {
+    gl.setSwapInterval(0);
+  }
+  console.error(`[gl] Window surface: ${glSurfaceW}x${glSurfaceH}`);
+
+  glNoFBORedirect = !!process.env.NO_FBO_REDIRECT;
+  if (glNoFBORedirect) {
+    console.error('[gl] NO_FBO_REDIRECT: cart renders directly to window surface');
+  }
+
+  // Create FBO at cart resolution — cart renders here, we blit to window surface
+  // This allows resize/letterbox and isolates the cart from the window surface
+  if (!glNoFBORedirect) {
+  const GL_TEXTURE_2D = 0x0DE1, GL_RGBA = 0x1908, GL_UNSIGNED_BYTE = 0x1401;
+  const GL_FRAMEBUFFER = 0x8D40, GL_COLOR_ATTACHMENT0 = 0x8CE0;
+  const GL_RENDERBUFFER = 0x8D41, GL_DEPTH24_STENCIL8 = 0x88F0;
+  const GL_DEPTH_STENCIL_ATTACHMENT = 0x821A;
+  const GL_NEAREST = 0x2600, GL_CLAMP_TO_EDGE = 0x812F;
+
+  glFBOW = glSurfaceW;
+  glFBOH = glSurfaceH;
+
+  glFBO = new Uint32Array(1);
+  gl.glGenFramebuffers(1, glFBO);
+  glFBO = glFBO[0];
+
+  const texIds = new Uint32Array(1);
+  gl.glGenTextures(1, texIds);
+  gl.glBindTexture(GL_TEXTURE_2D, texIds[0]);
+  gl.glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, glSurfaceW, glSurfaceH, 0, GL_RGBA, GL_UNSIGNED_BYTE, null);
+  gl.glTexParameteri(GL_TEXTURE_2D, 0x2801, GL_NEAREST);
+  gl.glTexParameteri(GL_TEXTURE_2D, 0x2800, GL_NEAREST);
+  gl.glTexParameteri(GL_TEXTURE_2D, 0x2802, GL_CLAMP_TO_EDGE);
+  gl.glTexParameteri(GL_TEXTURE_2D, 0x2803, GL_CLAMP_TO_EDGE);
+
+  gl.glBindFramebuffer(GL_FRAMEBUFFER, glFBO);
+  gl.glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texIds[0], 0);
+
+  const rbIds = new Uint32Array(1);
+  gl.glGenRenderbuffers(1, rbIds);
+  gl.glBindRenderbuffer(GL_RENDERBUFFER, rbIds[0]);
+  gl.glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, glSurfaceW, glSurfaceH);
+  gl.glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, rbIds[0]);
+
+  const status = gl.glCheckFramebufferStatus(GL_FRAMEBUFFER);
+  console.error(`[gl] FBO redirect: ${glSurfaceW}x${glSurfaceH} (status=0x${status.toString(16)})`);
+
+  // Redirect cart's bindFramebuffer(target, 0) → our FBO
+  const _origBindFB = gl.glBindFramebuffer;
+  let _lastDrawFBO = glFBO;  // track which FBO is the draw target
+  let _cartBlittedToFBO = false; // set when cart blits to our FBO
+  gl.glBindFramebuffer = (target, fb) => {
+    const actual = fb === 0 ? glFBO : fb;
+    if (target === 0x8D40) _lastDrawFBO = actual; // GL_FRAMEBUFFER sets both
+    else if (target === 0x8CA9) _lastDrawFBO = actual; // GL_DRAW_FRAMEBUFFER
+    _origBindFB.call(gl, target, actual);
+  };
+  gl._origBindFramebuffer = _origBindFB.bind(gl);
+
+  // Suppress color clear on our FBO after cart has blitted content to it.
+  // OpenArena's RB_SwapBuffers clears "default FB" at end-of-frame, wiping
+  // the 3D scene that was just blitted. The 2D (HUD) is drawn after the clear
+  // so it survives, but the 3D content gets lost. Fix: skip the color clear
+  // on our FBO when the cart just blitted to it (the 3D content is fresh).
+  const _origClear = gl.glClear;
+  gl._origClear = _origClear.bind(gl);
+  let _clearSuppressCount = 0;
+  gl.glClear = (mask) => {
+    if (_cartBlittedToFBO && _lastDrawFBO === glFBO && (mask & 0x4000)) {
+      // Cart is clearing our FBO's color buffer after a blit — suppress it.
+      _clearSuppressCount++;
+      if (_clearSuppressCount <= 5) {
+        console.error(`[fbo-fix] suppressed glClear(0x${mask.toString(16)}) on our FBO (count=${_clearSuppressCount})`);
+      }
+      const remaining = mask & ~0x4000; // keep depth/stencil clears if any
+      if (remaining) _origClear.call(gl, remaining);
+      return;
+    }
+    _origClear.call(gl, mask);
+  };
+
+  // Track when cart blits to our FBO + one-time diagnostic
+  const _origBlitFB = gl.glBlitFramebuffer;
+  let _blitDiagDone = false;
+  let _blitCount = 0;
+  gl.glBlitFramebuffer = (srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter) => {
+    if (_lastDrawFBO === glFBO && (mask & 0x4000)) {
+      _cartBlittedToFBO = true;
+      _blitCount++;
+      // One-time: read source FBO content before blit (after 300 blits ~ 5s of gameplay)
+      if (!_blitDiagDone && _blitCount > 300) {
+        _blitDiagDone = true;
+        // Read from the READ_FRAMEBUFFER (should be render FBO 2)
+        const dW = srcX1, dH = srcY1;
+        const px = Buffer.alloc(dW * dH * 4);
+        gl.glReadPixels(0, 0, dW, dH, 0x1908, 0x1401, px);
+        let nonBlack = 0;
+        for (let i = 0; i < px.length; i += 4) {
+          if (px[i] > 5 || px[i+1] > 5 || px[i+2] > 5) nonBlack++;
+        }
+        console.error(`[blit-diag] Source FBO content BEFORE blit: ${nonBlack}/${dW*dH} non-black (${(100*nonBlack/(dW*dH)).toFixed(1)}%)`);
+      }
+    }
+    _origBlitFB.call(gl, srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
+  };
+  gl._origBlitFramebuffer = _origBlitFB.bind(gl);
+  // Reset flag each frame (called from game loop after host blit)
+  gl._resetBlitFlag = () => { _cartBlittedToFBO = false; };
+
+  // Intercept glDrawBuffer/glReadBuffer: translate GL_BACK → GL_COLOR_ATTACHMENT0
+  // when our FBO is bound (FBOs don't support GL_BACK)
+  if (gl.glDrawBuffer) {
+    const _origDrawBuffer = gl.glDrawBuffer;
+    gl.glDrawBuffer = (buf) => {
+      _origDrawBuffer.call(gl, buf === 0x0405 ? 0x8CE0 : buf); // GL_BACK → GL_COLOR_ATTACHMENT0
+    };
+  }
+  if (gl.glReadBuffer) {
+    const _origReadBuffer = gl.glReadBuffer;
+    gl.glReadBuffer = (buf) => {
+      _origReadBuffer.call(gl, buf === 0x0405 ? 0x8CE0 : buf); // GL_BACK → GL_COLOR_ATTACHMENT0
+    };
+  }
+  gl._origBlitFramebuffer = _origBlitFB.bind(gl);
+
+  gl.glViewport(0, 0, glFBOW, glFBOH);
+  } // end if (!glNoFBORedirect)
+}
 videoOutput.setFrameSkip(frameSkip);
 videoOutput.setContrast(contrast);
 videoOutput.setSymbols(symbols);
@@ -113,15 +421,15 @@ const inputManager = new InputManager({ disableGamepad, debugInput, sdl: sdlInst
 const sdlWindow = videoOutput.getSDLWindow();
 if (sdlWindow) {
   inputManager.setSDLWindow(sdlWindow);
+  // Track window resizes for GL surface updates
+  if (glUseWindowSurface) {
+    sdlWindow.on('resize', (e) => {
+      glSurfaceW = e.width;
+      glSurfaceH = e.height;
+    });
+  }
 }
 const saveManager = new SaveManager(saveDir);
-
-const host = new LibretroHost({
-  videoOutput,
-  audioBridge,
-  inputManager,
-  saveManager,
-});
 
 // Enter alternate screen buffer, hide cursor (only for terminal modes)
 const useTerminal = videoMode === 'terminal' || videoMode === 'both';
@@ -131,17 +439,43 @@ if (useTerminal) {
 
 // Clean shutdown handler
 let shuttingDown = false;
+let host = null;
+let cartHost = null;
+let cartRunning = false;
+let jsGameSession = null;
+let jsGameRunning = false;
+
 async function shutdown() {
   if (shuttingDown) return;
   shuttingDown = true;
 
-  await host.shutdown();
+  if (cartHost) {
+    cartRunning = false;
+    // Save cart data
+    const saveData = cartHost.getSaveData();
+    if (saveData) {
+      const cartName = basename(romPath, '.wasc');
+      await saveManager.writeCartSave(cartName, saveData);
+    }
+    cartHost.destroy();
+  }
+
+  if (jsGameSession) {
+    jsGameRunning = false;
+    try { jsGameSession.destroy(); } catch {}
+  }
+
+  if (host) {
+    await host.shutdown();
+  }
 
   try {
     inputManager.destroy();
   } catch {
     // Ignore SDL controller cleanup errors
   }
+
+  videoOutput.destroy();
 
   // Restore terminal (only if we modified it)
   if (useTerminal) {
@@ -159,37 +493,481 @@ process.on('exit', () => {
   }
 });
 
-// Hotkeys via stdin (handled by InputManager, but save/load state needs extra handling)
+// Hotkeys via stdin
 if (process.stdin.isTTY) {
   process.stdin.on('data', async (key) => {
-    // F5 = save state (ESC [ 1 5 ~)
-    if (key === '\x1b[15~') {
-      await host.saveState(0);
-    }
-    // F7 = load state (ESC [ 1 8 ~)
-    if (key === '\x1b[18~') {
-      await host.loadState(0);
-    }
-    // F1 = reset (ESC [ 1 1 ~)
-    if (key === '\x1b[11~') {
-      host.reset();
-    }
     // ESC = quit
     if (key === '\x1b' && key.length === 1) {
       await shutdown();
     }
+    // Libretro-specific hotkeys
+    if (!isCart) {
+      // F5 = save state (ESC [ 1 5 ~)
+      if (key === '\x1b[15~') {
+        await host.saveState(0);
+      }
+      // F7 = load state (ESC [ 1 8 ~)
+      if (key === '\x1b[18~') {
+        await host.loadState(0);
+      }
+      // F1 = reset (ESC [ 1 1 ~)
+      if (key === '\x1b[11~') {
+        host.reset();
+      }
+    }
   });
 }
 
-// Start retroemulation
+// Start
 try {
-  await host.loadAndStart(romInfo.romPath, { saveDir, romData: romInfo.data });
+  if (isCart) {
+    await startCart();
+  } else if (isJsGame) {
+    await startJsGame();
+  } else {
+    host = new LibretroHost({
+      videoOutput,
+      audioBridge,
+      inputManager,
+      saveManager,
+    });
+    await host.loadAndStart(romInfo.romPath, { saveDir, romData: romInfo.data });
+  }
 } catch (err) {
   if (useTerminal) {
     process.stdout.write('\x1b[?1049l\x1b[?25h');
   }
   console.error(`Error: ${err.message}`);
   process.exit(1);
+}
+
+// --- WASM Cart runner ---
+
+async function startCart() {
+  cartHost = new CartHost();
+
+  // Load existing save data if available
+  const cartName = basename(romPath, '.wasc');
+  const existingSave = await saveManager.readCartSave(cartName);
+
+  const loadOptions = {
+    saveData: existingSave,
+    preferredWidth,
+    preferredHeight,
+    audioSampleRate: 48000,
+  };
+
+  if (cartUsesGL) {
+    // Re-assert our EGL context after SDL init
+    gl.makeCurrent();
+    // Wrap native-gles with WebGL2RenderingContext API (webgl_imports.js expects WebGL2)
+    const ctxW = glUseWindowSurface ? glSurfaceW : (preferredWidth || 320);
+    const ctxH = glUseWindowSurface ? glSurfaceH : (preferredHeight || 240);
+    loadOptions.glBackend = new WebGL2RenderingContext(gl, ctxW, ctxH);
+    loadOptions.nativeGL = gl;
+  }
+
+  await cartHost.load(romPath, loadOptions);
+
+  const info = cartHost.getInfo();
+  videoOutput.setAspectRatio(info.width / info.height);
+
+  // Log gpu_api for debugging
+  if (info.gpuApi > 0) {
+    console.error(`[cart] gpu_api=${info.gpuApi}`);
+  }
+
+  if (glUseWindowSurface) {
+    gl.makeCurrent();
+    if (!glNoFBORedirect) {
+      gl._origBindFramebuffer(0x8D40, glFBO);
+      gl.glViewport(0, 0, glFBOW, glFBOH);
+    } else {
+      gl.glViewport(0, 0, glSurfaceW, glSurfaceH);
+    }
+  } else {
+    // Resize SDL window — use preferred res if set, otherwise cart's resolution
+    videoOutput.resizeWindow(preferredWidth || info.width, preferredHeight || info.height);
+
+    // Resize GL context to match cart's actual dimensions
+    if (cartUsesGL && (info.width !== 320 || info.height !== 240)) {
+      gl.resizeContext(info.width, info.height);
+      gl.makeCurrent();
+      gl.glViewport(0, 0, info.width, info.height);
+    }
+  }
+
+  // Init audio — use cart's sample rate and format, host adapts
+  const audioFormat = cartHost.info?.audioIsF32 ? 'f32' : 's16';
+  const audioRate = cartHost.info?.audioSampleRate || 48000;
+  await audioBridge.init(audioRate, audioFormat);
+
+  cartRunning = true;
+  const targetMs = uncapped ? 0 : (1000 / 60); // 60 FPS or uncapped
+
+  let _lastFrameTime = performance.now();
+  let _fpsFrameCount = 0;
+  let _fpsLastReport = performance.now();
+  let _glReadTotal = 0;
+  let _glFlipTotal = 0;
+  let _renderTotal = 0;
+
+  function gameLoop() {
+    if (!cartRunning) return;
+
+    const now = performance.now();
+    const elapsed = now - _lastFrameTime;
+
+    if (uncapped || elapsed >= targetMs) {
+      // Drift compensation: preserve fractional time to prevent accumulation
+      _lastFrameTime = uncapped ? now : now - (elapsed % targetMs);
+
+      // Poll input (handles Start+Select exit combo)
+      inputManager.poll();
+
+      // Forward raw keyboard to wasmcart keyboard ABI
+      inputManager.updateCartKeyboard(cartHost);
+
+      // Map gamepad-node W3C gamepads to wasmcart pad format
+      const pads = mapGamepads();
+
+      // Run one frame
+      const result = cartHost.runFrame(pads);
+
+      // For GL carts: display the rendered frame
+      if (cartUsesGL) {
+        if (glUseWindowSurface) {
+          const _t0 = performance.now();
+          if (glNoFBORedirect) {
+            // One-time capture before swap
+            gl._totalFrames = (gl._totalFrames || 0) + 1;
+            if (gl._totalFrames === 600) {
+              gl.glBindFramebuffer(0x8D40, 0); // default FB
+              const dW = glSurfaceW, dH = glSurfaceH;
+              const px = Buffer.alloc(dW * dH * 4);
+              gl.glReadPixels(0, 0, dW, dH, 0x1908, 0x1401, px);
+              let nonBlack = 0;
+              for (let i = 0; i < px.length; i += 4) {
+                if (px[i] > 5 || px[i+1] > 5 || px[i+2] > 5) nonBlack++;
+              }
+              console.error(`[nofbo-dump] FB0 content: ${nonBlack}/${dW*dH} non-black pixels (${(100*nonBlack/(dW*dH)).toFixed(1)}%)`);
+              // Write PPM
+              const rgb = Buffer.alloc(dW * dH * 3);
+              for (let y = 0; y < dH; y++) {
+                const srcRow = (dH - 1 - y) * dW * 4;
+                const dstRow = y * dW * 3;
+                for (let x = 0; x < dW; x++) {
+                  rgb[dstRow + x*3] = px[srcRow + x*4];
+                  rgb[dstRow + x*3+1] = px[srcRow + x*4+1];
+                  rgb[dstRow + x*3+2] = px[srcRow + x*4+2];
+                }
+              }
+              writeFileSync('/tmp/oa_nofbo.ppm', Buffer.concat([Buffer.from(`P6\n${dW} ${dH}\n255\n`), rgb]));
+              console.error('[nofbo-dump] Wrote /tmp/oa_nofbo.ppm');
+            }
+            // Direct mode: cart rendered to window surface, just swap
+            gl.swapBuffers();
+          } else {
+            // Blit FBO → window surface with letterboxing, then swap
+            gl._origBindFramebuffer(0x8CA8, glFBO);  // READ_FRAMEBUFFER
+            gl._origBindFramebuffer(0x8CA9, 0);       // DRAW_FRAMEBUFFER
+            gl.glDisable(0x0C11); // GL_SCISSOR_TEST
+            gl.glViewport(0, 0, glSurfaceW, glSurfaceH);
+            gl.glClearColor(0, 0, 0, 1);
+            gl._origClear(0x4000);   // GL_COLOR_BUFFER_BIT — use orig to bypass interception
+            gl._origBlitFramebuffer(
+              0, 0, glFBOW, glFBOH,
+              0, 0, glSurfaceW, glSurfaceH,
+              0x4000, 0x2601      // COLOR_BUFFER_BIT, LINEAR
+            );
+            gl.swapBuffers();
+            if (gl._resetBlitFlag) gl._resetBlitFlag();
+            // Restore FBO + viewport for next frame
+            gl._origBindFramebuffer(0x8D40, glFBO);  // FRAMEBUFFER
+            gl.glViewport(0, 0, glFBOW, glFBOH);
+          }
+          const _t1 = performance.now();
+          _renderTotal += (_t1 - _t0);
+        } else {
+          // Pbuffer mode: readback is decoupled — see termReadbackInterval below
+          // Just store current dimensions for the readback timer
+          startCart._glW = result.width;
+          startCart._glH = result.height;
+        }
+      } else {
+        // Send framebuffer to video output (XRGB8888)
+        // Send framebuffer to video output (XRGB8888)
+        videoOutput.onCartFrame(result.framebuffer, result.width, result.height);
+      }
+
+      _fpsFrameCount++;
+      const _fpsNow = performance.now();
+      if (_fpsNow - _fpsLastReport >= 5000) {
+        const elapsed = (_fpsNow - _fpsLastReport) / 1000;
+        const fps = (_fpsFrameCount / elapsed).toFixed(1);
+        if (cartUsesGL && glUseWindowSurface) {
+          console.error(`[perf] ${fps} fps | swapBuffers=${(_renderTotal/_fpsFrameCount).toFixed(2)}ms`);
+        } else if (cartUsesGL) {
+          console.error(`[perf] ${fps} fps | glRead=${(_glReadTotal/_fpsFrameCount).toFixed(2)}ms flip=${(_glFlipTotal/_fpsFrameCount).toFixed(2)}ms render=${(_renderTotal/_fpsFrameCount).toFixed(2)}ms`);
+        } else {
+          console.error(`[perf] ${fps} fps`);
+        }
+        _fpsFrameCount = 0;
+        _fpsLastReport = _fpsNow;
+        _glReadTotal = 0;
+        _glFlipTotal = 0;
+        _renderTotal = 0;
+      }
+
+      // Queue audio
+      if (result.audio && result.audio.length > 0) {
+        const buffer = Buffer.from(result.audio.buffer, result.audio.byteOffset, result.audio.byteLength);
+        audioBridge.device.enqueue(buffer);
+      }
+    }
+
+    // Frame pacing: use setTimeout for coarse timing, setImmediate for tight timing
+    if (uncapped) {
+      setImmediate(gameLoop);
+    } else {
+      const remaining = targetMs - (performance.now() - _lastFrameTime);
+      if (remaining > 2) {
+        setTimeout(gameLoop, Math.floor(remaining) - 1);
+      } else {
+        setImmediate(gameLoop);
+      }
+    }
+  }
+
+  gameLoop();
+
+  // Decoupled GL pbuffer readback for terminal display.
+  // Runs at --term-fps (default 30) independently of the game loop,
+  // so glReadPixels + flip + chafa don't slow down the cart.
+  if (cartUsesGL && !glUseWindowSurface) {
+    const termMs = 1000 / termFps;
+    console.error(`[gl] Terminal readback decoupled at ${termFps} fps (${termMs.toFixed(0)}ms)`);
+    setInterval(() => {
+      if (!cartRunning) return;
+      const w = startCart._glW;
+      const h = startCart._glH;
+      if (!w || !h) return;
+
+      const GL_RGBA = 0x1908, GL_UNSIGNED_BYTE = 0x1401;
+      if (!startCart._glPixels || startCart._glPixels.length !== w * h * 4) {
+        startCart._glPixels = new Uint8Array(w * h * 4);
+      }
+      const _t0 = performance.now();
+      gl.glFinish();
+      gl.glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, startCart._glPixels);
+      const _t1 = performance.now();
+
+      // GL is bottom-up, flip vertically
+      const rowBytes = w * 4;
+      if (!startCart._flipped || startCart._flipped.length !== w * h * 4) {
+        startCart._flipped = new Uint8Array(w * h * 4);
+      }
+      const src = startCart._glPixels;
+      const dst = startCart._flipped;
+      for (let y = 0; y < h; y++) {
+        const srcOff = (h - 1 - y) * rowBytes;
+        const dstOff = y * rowBytes;
+        dst.set(src.subarray(srcOff, srcOff + rowBytes), dstOff);
+      }
+      const _t2 = performance.now();
+      videoOutput.onCartFrameRGBA(dst, w, h);
+      const _t3 = performance.now();
+      _glReadTotal += (_t1 - _t0);
+      _glFlipTotal += (_t2 - _t1);
+      _renderTotal += (_t3 - _t2);
+    }, termMs);
+  }
+}
+
+// Map W3C gamepads → jsgame standard-name pad objects (rungame's synthetic navigator
+// speaks button names, not a bitmask). d-pad from buttons 12-15, face from 0-3.
+function mapJsGamePads() {
+  const hasW3C = typeof navigator !== 'undefined' && typeof navigator.getGamepads === 'function';
+  const w3c = hasW3C ? navigator.getGamepads() : [];
+  const pads = [];
+  for (let i = 0; i < 4; i++) {
+    const gp = w3c[i];
+    if (!gp || !gp.connected) { pads.push({}); continue; }
+    const b = gp.buttons;
+    pads.push({
+      a: !!b[0]?.pressed, b: !!b[1]?.pressed, x: !!b[2]?.pressed, y: !!b[3]?.pressed,
+      l1: !!b[4]?.pressed, r1: !!b[5]?.pressed, l2: !!b[6]?.pressed, r2: !!b[7]?.pressed,
+      select: !!b[8]?.pressed, start: !!b[9]?.pressed,
+      up: !!b[12]?.pressed, down: !!b[13]?.pressed, left: !!b[14]?.pressed, right: !!b[15]?.pressed,
+      lx: gp.axes?.[0] || 0, ly: gp.axes?.[1] || 0, rx: gp.axes?.[2] || 0, ry: gp.axes?.[3] || 0,
+    });
+  }
+  return pads;
+}
+
+// Run a jsgame (.jsgame/.jsg) headless via rungame's createHostSession and pump its
+// frames into retroemu's OWN video pipeline (terminal chafa / SDL / both) — the same
+// onCartFrameRGBA path a GL/cart frame uses. So a JS web game renders as ANSI art in the
+// terminal, exactly like every other retroemu system. rungame's realm needs
+// --experimental-vm-modules; cli.js self-re-execs with it (see the top of this file).
+async function startJsGame() {
+  jsGameSession = await createJsGameSession(romPath, {
+    width: preferredWidth || 640,
+    height: preferredHeight || 480,
+  });
+
+  const cw = jsGameSession.canvas.width, ch = jsGameSession.canvas.height;
+  videoOutput.setAspectRatio(cw / ch);
+  videoOutput.resizeWindow(cw, ch);
+
+  jsGameRunning = true;
+  const targetMs = uncapped ? 0 : (1000 / 60);
+  let _lastFrameTime = performance.now();
+  let _stepping = false;
+
+  async function gameLoop() {
+    if (!jsGameRunning) return;
+    const now = performance.now();
+    const elapsed = now - _lastFrameTime;
+
+    if (!_stepping && (uncapped || elapsed >= targetMs)) {
+      _lastFrameTime = uncapped ? now : now - (elapsed % targetMs);
+      inputManager.poll(); // Start+Select exit combo
+      jsGameSession.setInput(mapJsGamePads());
+
+      _stepping = true;
+      await jsGameSession.stepFrame(); // async: yields for the game's async work
+      _stepping = false;
+
+      const frame = jsGameSession.readFrame(); // { data (RGBA), width, height }
+      const buf = Buffer.from(frame.data.buffer, frame.data.byteOffset, frame.data.byteLength);
+      videoOutput.onCartFrameRGBA(buf, frame.width, frame.height);
+    }
+
+    if (uncapped) {
+      setImmediate(gameLoop);
+    } else {
+      const remaining = targetMs - (performance.now() - _lastFrameTime);
+      if (remaining > 2) setTimeout(gameLoop, Math.floor(remaining) - 1);
+      else setImmediate(gameLoop);
+    }
+  }
+  gameLoop();
+}
+
+function mapGamepads() {
+  const pads = [];
+  let hasW3C = typeof navigator !== 'undefined' && typeof navigator.getGamepads === 'function';
+  const w3cPads = hasW3C ? navigator.getGamepads() : [];
+
+  // One-time debug: log how many gamepads found
+  if (!mapGamepads._countLogged) {
+    mapGamepads._countLogged = true;
+    const connected = w3cPads.filter(g => g && g.connected).length;
+    console.error(`GAMEPAD: hasW3C=${hasW3C}, total=${w3cPads.length}, connected=${connected}`);
+  }
+
+  for (let i = 0; i < 4; i++) {
+    const gp = w3cPads[i];
+
+    let buttons = 0;
+    let leftX = 0, leftY = 0, rightX = 0, rightY = 0;
+    let leftTrigger = 0, rightTrigger = 0;
+    let connected = false;
+
+    if (gp && gp.connected) {
+      connected = true;
+      // W3C button index → wasmcart BUTTON bitmask
+      if (gp.buttons[0]?.pressed) buttons |= BUTTON.A;      // South
+      if (gp.buttons[1]?.pressed) buttons |= BUTTON.B;      // East
+      if (gp.buttons[2]?.pressed) buttons |= BUTTON.X;      // West
+      if (gp.buttons[3]?.pressed) buttons |= BUTTON.Y;      // North
+      if (gp.buttons[4]?.pressed) buttons |= BUTTON.L;      // L1
+      if (gp.buttons[5]?.pressed) buttons |= BUTTON.R;      // R1
+      if (gp.buttons[6]?.pressed) buttons |= (1 << 14);     // LT as digital button bit 14
+      if (gp.buttons[7]?.pressed) buttons |= (1 << 15);     // RT as digital button bit 14
+      if (gp.buttons[8]?.pressed) buttons |= BUTTON.SELECT;
+      if (gp.buttons[9]?.pressed) buttons |= BUTTON.START;
+      if (gp.buttons[10]?.pressed) buttons |= BUTTON.L3;
+      if (gp.buttons[11]?.pressed) buttons |= BUTTON.R3;
+      if (gp.buttons[12]?.pressed) buttons |= BUTTON.UP;
+      if (gp.buttons[13]?.pressed) buttons |= BUTTON.DOWN;
+      if (gp.buttons[14]?.pressed) buttons |= BUTTON.LEFT;
+      if (gp.buttons[15]?.pressed) buttons |= BUTTON.RIGHT;
+
+      // Analog sticks: W3C float (-1..1) → int16 (-32768..32767)
+      const toI16 = (v) => Math.round(Math.max(-1, Math.min(1, v || 0)) * 32767);
+      leftX = toI16(gp.axes[0]);
+      leftY = toI16(gp.axes[1]);
+      rightX = toI16(gp.axes[2]);
+      rightY = toI16(gp.axes[3]);
+
+      // Triggers: try button values first, fall back to axes
+      // Auto-calibrate: some gamepads (e.g. 8BitDo) report 0.5-0.64 at rest
+      const toU8 = (v) => Math.round(Math.max(0, Math.min(1, v || 0)) * 255);
+      const gpIdx = gp._wcIdx = gp._wcIdx ?? i;
+      if (!mapGamepads._triggerBaseline) mapGamepads._triggerBaseline = {};
+      const rawLT = gp.buttons[6]?.value || 0;
+      const rawRT = gp.buttons[7]?.value || 0;
+      if (!mapGamepads._triggerBaseline[gpIdx]) {
+        // Capture resting values on first read
+        mapGamepads._triggerBaseline[gpIdx] = { left: rawLT, right: rawRT };
+      }
+      const bl = mapGamepads._triggerBaseline[gpIdx];
+      const ltRange = Math.max(0.01, 1 - bl.left);
+      const rtRange = Math.max(0.01, 1 - bl.right);
+      leftTrigger = toU8(Math.max(0, rawLT - bl.left) / ltRange);
+      rightTrigger = toU8(Math.max(0, rawRT - bl.right) / rtRange);
+
+      // Debug: log full gamepad state once when any button is pressed
+      if (!mapGamepads._debugged) {
+        const anyPressed = gp.buttons.some(b => b?.pressed);
+        if (anyPressed) {
+          mapGamepads._debugged = true;
+          console.error('GAMEPAD DEBUG: id:', gp.id);
+          console.error('GAMEPAD DEBUG: axes count:', gp.axes.length, 'buttons count:', gp.buttons.length);
+          for (let b = 0; b < gp.buttons.length; b++) {
+            const btn = gp.buttons[b];
+            if (btn) console.error(`  btn[${b}]: pressed=${btn.pressed} value=${btn.value}`);
+          }
+          if (gp.axes.length > 0) {
+            console.error('GAMEPAD DEBUG: axes:', gp.axes.map((v, i) => `[${i}]=${v.toFixed(3)}`).join(' '));
+          }
+          if (bl.left > 0.01 || bl.right > 0.01) {
+            console.error('GAMEPAD DEBUG: trigger baseline calibration: LT=', bl.left.toFixed(3), 'RT=', bl.right.toFixed(3));
+          }
+        }
+      }
+      // Fallback to axes if button-based triggers gave zero
+      if (!leftTrigger && gp.axes.length > 4 && gp.axes[4] != null) {
+        leftTrigger = toU8((gp.axes[4] + 1) / 2);
+      }
+      if (!rightTrigger && gp.axes.length > 5 && gp.axes[5] != null) {
+        rightTrigger = toU8((gp.axes[5] + 1) / 2);
+      }
+    }
+
+    // Merge keyboard input into pad 0
+    if (i === 0) {
+      const kbButtons = inputManager.getKeyboardButtons();
+      if (kbButtons) {
+        buttons |= kbButtons;
+        connected = true;
+      }
+    }
+
+    let name = '';
+    if (gp && gp.id) {
+      name = gp.id;
+      // If keyboard is also contributing to this pad, note both
+      if (i === 0 && inputManager.getKeyboardButtons()) name += ' + Keyboard';
+    } else if (i === 0 && connected) {
+      name = 'Keyboard';
+    }
+    pads.push(connected ? { connected: true, buttons, leftX, leftY, rightX, rightY, leftTrigger, rightTrigger, name } : null);
+  }
+
+  return pads;
 }
 
 function printUsage() {
@@ -200,11 +978,14 @@ function printUsage() {
   console.log(`Options:`);
   console.log(`  --save-dir <dir>     Directory for save files (default: <rom-dir>/saves)`);
   console.log(`  --frame-skip <n>     Render every Nth frame to terminal (default: 2)`);
+  console.log(`  --term-fps <n>       Terminal readback rate for GL carts (default: 30)`);
   console.log(`  --contrast <n>       Contrast boost, 1.0=normal, 1.5=more contrast (default: 1.0)`);
   console.log(``);
   console.log(`Video output:`);
   console.log(`  --video <mode>       Output mode: terminal, sdl, both (default: terminal)`);
   console.log(`  --scale <n>          SDL window scale factor (default: 2)`);
+  console.log(`  --res <WxH>          Preferred resolution for WASM carts (e.g. 800x600, 1280x720)`);
+  console.log(`  -f, --fullscreen     Start SDL window in fullscreen mode`);
   console.log(``);
   console.log(`Terminal graphics options:`);
   console.log(`  --symbols <type>     Symbol set: block, half, ascii, ascii+block, solid,`);
@@ -229,6 +1010,7 @@ function printUsage() {
   console.log(`  Other      ColecoVision (.col), Vectrex (.vec)`);
   console.log(`  Computers  ZX Spectrum (.tzx, .z80), MSX (.mx1, .mx2, .rom)`);
   console.log(`  Sony       PlayStation (.iso, .pbp, .m3u)`);
+  console.log(`  WASM       WASM Cart (.wasc)`);
   console.log(``);
   console.log(`Controls:`);
   console.log(`  Gamepad    Automatically detected (2100+ controllers)`);

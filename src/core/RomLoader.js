@@ -19,9 +19,19 @@ export async function loadRom(inputPath) {
 
   // Regular file - read directly
   const data = await fs.readFile(inputPath);
+  let romPath = inputPath;
+
+  // .bin is ambiguous — check magic bytes for N64 ROM signatures
+  if (ext === '.bin' && data.length >= 4) {
+    const magic = data.readUInt32BE(0);
+    if (magic === 0x80371240 || magic === 0x40123780 || magic === 0x37804012) {
+      romPath = inputPath.replace(/\.bin$/i, '.z64');
+    }
+  }
+
   return {
     data,
-    romPath: inputPath,
+    romPath,
     originalPath: inputPath,
   };
 }
@@ -62,10 +72,23 @@ async function extractRomFromZip(zipPath) {
           const chunks = [];
           readStream.on('data', (chunk) => chunks.push(chunk));
           readStream.on('end', () => {
+            const data = Buffer.concat(chunks);
+            let fileName = entry.fileName;
+
+            // .bin is ambiguous — check magic bytes for N64 ROM signatures
+            if (entryExt === '.bin' && data.length >= 4) {
+              const magic = data.readUInt32BE(0);
+              if (magic === 0x80371240 || // .z64 (big-endian)
+                  magic === 0x40123780 || // .n64 (little-endian)
+                  magic === 0x37804012) { // .v64 (byte-swapped)
+                fileName = fileName.replace(/\.bin$/i, '.z64');
+              }
+            }
+
             foundRom = {
-              data: Buffer.concat(chunks),
+              data,
               // Use the filename inside the ZIP for extension detection
-              romPath: path.join(path.dirname(zipPath), entry.fileName),
+              romPath: path.join(path.dirname(zipPath), fileName),
               originalPath: zipPath,
               zipEntry: entry.fileName,
             };
