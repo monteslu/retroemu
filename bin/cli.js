@@ -44,6 +44,11 @@ let dither = false;
 let termFps = 30;
 let disableGamepad = false;
 let debugInput = false;
+
+// Verbose dev logging (GL/cart/perf/fbo internals). Off by default so the console stays
+// clean; enable with RETROEMU_DEBUG=1 (or --debug). Real errors + --help are never gated.
+const DEBUG = !!process.env.RETROEMU_DEBUG || process.argv.includes('--debug');
+const dlog = (...a) => { if (DEBUG) console.error(...a); };
 let videoMode = 'terminal';  // terminal | sdl | both
 let sdlScale = 1;
 let preferredWidth = 0;   // 0 = no preference (cart chooses)
@@ -113,7 +118,7 @@ if (isZipFile(romPath)) {
   try {
     romInfo = await loadRom(romPath);
     if (romInfo.zipEntry) {
-      console.log(`Extracted: ${romInfo.zipEntry}`);
+      dlog(`Extracted: ${romInfo.zipEntry}`);
     }
     system = detectSystem(romInfo.romPath);
   } catch (err) {
@@ -222,7 +227,7 @@ if (isCart) {
     // Fallback for carts using features like exnref that need flags
     // Skip pre-scan, let CartHost handle compilation
     wasmModule = null;
-    console.error(`[warn] Pre-compile failed (${e.message}), skipping import scan`);
+    dlog(`[warn] Pre-compile failed (${e.message}), skipping import scan`);
   }
   // Detect GL carts: imports from 'gl' module, or GL functions under 'env' (emscripten-style)
   const wasmImports = wasmModule ? WebAssembly.Module.imports(wasmModule) : [];
@@ -280,11 +285,11 @@ if (glUseWindowSurface) {
   if (gl.setSwapInterval) {
     gl.setSwapInterval(0);
   }
-  console.error(`[gl] Window surface: ${glSurfaceW}x${glSurfaceH}`);
+  dlog(`[gl] Window surface: ${glSurfaceW}x${glSurfaceH}`);
 
   glNoFBORedirect = !!process.env.NO_FBO_REDIRECT;
   if (glNoFBORedirect) {
-    console.error('[gl] NO_FBO_REDIRECT: cart renders directly to window surface');
+    process.env.RETROEMU_DEBUG && console.error('[gl] NO_FBO_REDIRECT: cart renders directly to window surface');
   }
 
   // Create FBO at cart resolution — cart renders here, we blit to window surface
@@ -322,7 +327,7 @@ if (glUseWindowSurface) {
   gl.glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, rbIds[0]);
 
   const status = gl.glCheckFramebufferStatus(GL_FRAMEBUFFER);
-  console.error(`[gl] FBO redirect: ${glSurfaceW}x${glSurfaceH} (status=0x${status.toString(16)})`);
+  dlog(`[gl] FBO redirect: ${glSurfaceW}x${glSurfaceH} (status=0x${status.toString(16)})`);
 
   // Redirect cart's bindFramebuffer(target, 0) → our FBO
   const _origBindFB = gl.glBindFramebuffer;
@@ -349,7 +354,7 @@ if (glUseWindowSurface) {
       // Cart is clearing our FBO's color buffer after a blit — suppress it.
       _clearSuppressCount++;
       if (_clearSuppressCount <= 5) {
-        console.error(`[fbo-fix] suppressed glClear(0x${mask.toString(16)}) on our FBO (count=${_clearSuppressCount})`);
+        dlog(`[fbo-fix] suppressed glClear(0x${mask.toString(16)}) on our FBO (count=${_clearSuppressCount})`);
       }
       const remaining = mask & ~0x4000; // keep depth/stencil clears if any
       if (remaining) _origClear.call(gl, remaining);
@@ -377,7 +382,7 @@ if (glUseWindowSurface) {
         for (let i = 0; i < px.length; i += 4) {
           if (px[i] > 5 || px[i+1] > 5 || px[i+2] > 5) nonBlack++;
         }
-        console.error(`[blit-diag] Source FBO content BEFORE blit: ${nonBlack}/${dW*dH} non-black (${(100*nonBlack/(dW*dH)).toFixed(1)}%)`);
+        dlog(`[blit-diag] Source FBO content BEFORE blit: ${nonBlack}/${dW*dH} non-black (${(100*nonBlack/(dW*dH)).toFixed(1)}%)`);
       }
     }
     _origBlitFB.call(gl, srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
@@ -444,6 +449,7 @@ let cartHost = null;
 let cartRunning = false;
 let jsGameSession = null;
 let jsGameRunning = false;
+let _realGetGamepads = null; // real SDL getGamepads, saved before createHostSession clobbers navigator
 
 async function shutdown() {
   if (shuttingDown) return;
@@ -574,7 +580,7 @@ async function startCart() {
 
   // Log gpu_api for debugging
   if (info.gpuApi > 0) {
-    console.error(`[cart] gpu_api=${info.gpuApi}`);
+    dlog(`[cart] gpu_api=${info.gpuApi}`);
   }
 
   if (glUseWindowSurface) {
@@ -650,7 +656,7 @@ async function startCart() {
               for (let i = 0; i < px.length; i += 4) {
                 if (px[i] > 5 || px[i+1] > 5 || px[i+2] > 5) nonBlack++;
               }
-              console.error(`[nofbo-dump] FB0 content: ${nonBlack}/${dW*dH} non-black pixels (${(100*nonBlack/(dW*dH)).toFixed(1)}%)`);
+              dlog(`[nofbo-dump] FB0 content: ${nonBlack}/${dW*dH} non-black pixels (${(100*nonBlack/(dW*dH)).toFixed(1)}%)`);
               // Write PPM
               const rgb = Buffer.alloc(dW * dH * 3);
               for (let y = 0; y < dH; y++) {
@@ -663,7 +669,7 @@ async function startCart() {
                 }
               }
               writeFileSync('/tmp/oa_nofbo.ppm', Buffer.concat([Buffer.from(`P6\n${dW} ${dH}\n255\n`), rgb]));
-              console.error('[nofbo-dump] Wrote /tmp/oa_nofbo.ppm');
+              process.env.RETROEMU_DEBUG && console.error('[nofbo-dump] Wrote /tmp/oa_nofbo.ppm');
             }
             // Direct mode: cart rendered to window surface, just swap
             gl.swapBuffers();
@@ -706,11 +712,11 @@ async function startCart() {
         const elapsed = (_fpsNow - _fpsLastReport) / 1000;
         const fps = (_fpsFrameCount / elapsed).toFixed(1);
         if (cartUsesGL && glUseWindowSurface) {
-          console.error(`[perf] ${fps} fps | swapBuffers=${(_renderTotal/_fpsFrameCount).toFixed(2)}ms`);
+          dlog(`[perf] ${fps} fps | swapBuffers=${(_renderTotal/_fpsFrameCount).toFixed(2)}ms`);
         } else if (cartUsesGL) {
-          console.error(`[perf] ${fps} fps | glRead=${(_glReadTotal/_fpsFrameCount).toFixed(2)}ms flip=${(_glFlipTotal/_fpsFrameCount).toFixed(2)}ms render=${(_renderTotal/_fpsFrameCount).toFixed(2)}ms`);
+          dlog(`[perf] ${fps} fps | glRead=${(_glReadTotal/_fpsFrameCount).toFixed(2)}ms flip=${(_glFlipTotal/_fpsFrameCount).toFixed(2)}ms render=${(_renderTotal/_fpsFrameCount).toFixed(2)}ms`);
         } else {
-          console.error(`[perf] ${fps} fps`);
+          dlog(`[perf] ${fps} fps`);
         }
         _fpsFrameCount = 0;
         _fpsLastReport = _fpsNow;
@@ -746,7 +752,7 @@ async function startCart() {
   // so glReadPixels + flip + chafa don't slow down the cart.
   if (cartUsesGL && !glUseWindowSurface) {
     const termMs = 1000 / termFps;
-    console.error(`[gl] Terminal readback decoupled at ${termFps} fps (${termMs.toFixed(0)}ms)`);
+    dlog(`[gl] Terminal readback decoupled at ${termFps} fps (${termMs.toFixed(0)}ms)`);
     setInterval(() => {
       if (!cartRunning) return;
       const w = startCart._glW;
@@ -787,8 +793,12 @@ async function startCart() {
 // Map W3C gamepads → jsgame standard-name pad objects (rungame's synthetic navigator
 // speaks button names, not a bitmask). d-pad from buttons 12-15, face from 0-3.
 function mapJsGamePads() {
-  const hasW3C = typeof navigator !== 'undefined' && typeof navigator.getGamepads === 'function';
-  const w3c = hasW3C ? navigator.getGamepads() : [];
+  // Use the REAL SDL getGamepads captured before the session clobbered navigator (see
+  // startJsGame). Falling back to navigator.getGamepads would read the session's own
+  // injected pads → an empty feedback loop → no controller input.
+  const getPads = _realGetGamepads
+    || (typeof navigator !== 'undefined' && typeof navigator.getGamepads === 'function' ? navigator.getGamepads.bind(navigator) : null);
+  const w3c = getPads ? getPads() : [];
   const pads = [];
   for (let i = 0; i < 4; i++) {
     const gp = w3c[i];
@@ -811,6 +821,16 @@ function mapJsGamePads() {
 // terminal, exactly like every other retroemu system. rungame's realm needs
 // --experimental-vm-modules; cli.js self-re-execs with it (see the top of this file).
 async function startJsGame() {
+  // createHostSession OVERRIDES globalThis.navigator.getGamepads to return its own
+  // host-INJECTED pads (that's how it feeds input to the game — via setInput). But that
+  // clobbers the SDL-backed getGamepads our InputManager installed, so if we read
+  // navigator.getGamepads() afterward we'd get the (empty) injected pads, not the real
+  // controllers. Capture the REAL SDL getGamepads BEFORE the session overrides it, and
+  // read physical controllers through that saved reference (see mapJsGamePads).
+  _realGetGamepads = (typeof navigator !== 'undefined' && navigator.getGamepads)
+    ? navigator.getGamepads.bind(navigator)
+    : null;
+
   jsGameSession = await createJsGameSession(romPath, {
     width: preferredWidth || 640,
     height: preferredHeight || 480,
@@ -864,7 +884,7 @@ function mapGamepads() {
   if (!mapGamepads._countLogged) {
     mapGamepads._countLogged = true;
     const connected = w3cPads.filter(g => g && g.connected).length;
-    console.error(`GAMEPAD: hasW3C=${hasW3C}, total=${w3cPads.length}, connected=${connected}`);
+    dlog(`GAMEPAD: hasW3C=${hasW3C}, total=${w3cPads.length}, connected=${connected}`);
   }
 
   for (let i = 0; i < 4; i++) {
@@ -924,17 +944,17 @@ function mapGamepads() {
         const anyPressed = gp.buttons.some(b => b?.pressed);
         if (anyPressed) {
           mapGamepads._debugged = true;
-          console.error('GAMEPAD DEBUG: id:', gp.id);
-          console.error('GAMEPAD DEBUG: axes count:', gp.axes.length, 'buttons count:', gp.buttons.length);
+          debugInput && console.error('GAMEPAD DEBUG: id:', gp.id);
+          debugInput && console.error('GAMEPAD DEBUG: axes count:', gp.axes.length, 'buttons count:', gp.buttons.length);
           for (let b = 0; b < gp.buttons.length; b++) {
             const btn = gp.buttons[b];
-            if (btn) console.error(`  btn[${b}]: pressed=${btn.pressed} value=${btn.value}`);
+            if (btn && debugInput) console.error(`  btn[${b}]: pressed=${btn.pressed} value=${btn.value}`);
           }
           if (gp.axes.length > 0) {
-            console.error('GAMEPAD DEBUG: axes:', gp.axes.map((v, i) => `[${i}]=${v.toFixed(3)}`).join(' '));
+            debugInput && console.error('GAMEPAD DEBUG: axes:', gp.axes.map((v, i) => `[${i}]=${v.toFixed(3)}`).join(' '));
           }
           if (bl.left > 0.01 || bl.right > 0.01) {
-            console.error('GAMEPAD DEBUG: trigger baseline calibration: LT=', bl.left.toFixed(3), 'RT=', bl.right.toFixed(3));
+            debugInput && console.error('GAMEPAD DEBUG: trigger baseline calibration: LT=', bl.left.toFixed(3), 'RT=', bl.right.toFixed(3));
           }
         }
       }

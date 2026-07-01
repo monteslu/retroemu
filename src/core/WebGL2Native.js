@@ -151,7 +151,7 @@ export function createWebGL2Context() {
       if (arguments.length === 6) {
         // texImage2D(target, level, internalformat, format, type, source)
         // This is the ImageData/HTMLImageElement overload — shouldn't happen in Node
-        console.error('[WebGL2Native] texImage2D 6-arg form not supported');
+        process.env.RETROEMU_DEBUG && console.error('[WebGL2Native] texImage2D 6-arg form not supported');
         return;
       }
       gl.glTexImage2D(target, level, internalformat, width, height, border, format, type, data || null);
@@ -159,7 +159,7 @@ export function createWebGL2Context() {
 
     texSubImage2D(target, level, xoffset, yoffset, width, height, format, type, data) {
       if (arguments.length === 7) {
-        console.error('[WebGL2Native] texSubImage2D 7-arg form not supported');
+        process.env.RETROEMU_DEBUG && console.error('[WebGL2Native] texSubImage2D 7-arg form not supported');
         return;
       }
       gl.glTexSubImage2D(target, level, xoffset, yoffset, width, height, format, type, data || null);
@@ -369,7 +369,7 @@ export function createWebGL2Context() {
               const result = val.apply(target, args);
               return result;
             } catch (e) {
-              console.error(`[GL ERROR] ${prop}(${args.map(a => typeof a === 'object' ? '[obj]' : a).join(', ')}): ${e.message}`);
+              process.env.RETROEMU_DEBUG && console.error(`[GL ERROR] ${prop}(${args.map(a => typeof a === 'object' ? '[obj]' : a).join(', ')}): ${e.message}`);
               throw e;
             }
           };

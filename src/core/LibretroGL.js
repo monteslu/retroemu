@@ -77,12 +77,12 @@ export class LibretroGL {
       RETRO_HW_CONTEXT_OPENGL_CORE,
     ];
     if (!supported.includes(contextType)) {
-      console.error(`[libretro-gl] Unsupported HW context type: ${contextType}`);
+      process.env.RETROEMU_DEBUG && console.error(`[libretro-gl] Unsupported HW context type: ${contextType}`);
       return false;
     }
 
     this.contextType = contextType;
-    console.error(`[libretro-gl] HW render requested: type=${contextType} version=${versionMajor}.${versionMinor} depth=${depth} stencil=${stencil} bottomLeft=${this.bottomLeftOrigin}`);
+    process.env.RETROEMU_DEBUG && console.error(`[libretro-gl] HW render requested: type=${contextType} version=${versionMajor}.${versionMinor} depth=${depth} stencil=${stencil} bottomLeft=${this.bottomLeftOrigin}`);
 
     // Create callback wrappers the WASM core can call
 
@@ -141,7 +141,7 @@ export class LibretroGL {
     // The Emscripten GL layer manages its own FBO tracking — we don't create one.
     this.fbo = 0;
     gl.glViewport(0, 0, width, height);
-    console.error(`[libretro-gl] Using default FBO: ${width}x${height}`);
+    process.env.RETROEMU_DEBUG && console.error(`[libretro-gl] Using default FBO: ${width}x${height}`);
 
     // Call the core's context_reset callback
     if (this.contextResetPtr) {

@@ -109,14 +109,14 @@ export class LibretroHost {
         canvas.getContextSafariWebGL2Fixed = canvas.getContext;
         glCanvas = canvas;
         this._glContextCreated = true;
-        console.error(`[libretro] webgl-node context created for ${system.core}`);
+        process.env.RETROEMU_DEBUG && console.error(`[libretro] webgl-node context created for ${system.core}`);
       } else {
         // Unminified builds: patch WASM GL imports directly
         const gl = await import('native-gles');
         gl.default.createContext(640, 480);
         gl.default.makeCurrent();
         this._glContextCreated = true;
-        console.error(`[libretro] EGL context created for ${system.core}`);
+        process.env.RETROEMU_DEBUG && console.error(`[libretro] EGL context created for ${system.core}`);
 
         let wasmMemory = null;
         glBridge = createEmscriptenGLBridge(() => wasmMemory);
@@ -133,7 +133,7 @@ export class LibretroHost {
       const handle = this.core.GL.createContext(glCanvas, { majorVersion: 2 });
       if (handle > 0) {
         this.core.GL.makeContextCurrent(handle);
-        console.error(`[libretro] Emscripten GL context initialized (handle=${handle})`);
+        process.env.RETROEMU_DEBUG && console.error(`[libretro] Emscripten GL context initialized (handle=${handle})`);
       }
     }
 
@@ -163,7 +163,7 @@ export class LibretroHost {
       if (!this.hwRender.createContext(w, h, this._glContextCreated)) {
         throw new Error('Failed to create GL context for HW render');
       }
-      console.error(`[libretro] HW render active: ${w}x${h}`);
+      process.env.RETROEMU_DEBUG && console.error(`[libretro] HW render active: ${w}x${h}`);
     }
 
     // Set display aspect ratio for correct rendering
@@ -265,7 +265,7 @@ export class LibretroHost {
       const gfxVar = this.coreVariables.get('parallel-n64-gfxplugin');
       if (gfxVar) {
         gfxVar.value = 'glide64';
-        console.error('[libretro] Override: gfxplugin = glide64');
+        process.env.RETROEMU_DEBUG && console.error('[libretro] Override: gfxplugin = glide64');
       }
     }
     if (this.coreName === 'beetle_psx_hw') {
@@ -273,7 +273,7 @@ export class LibretroHost {
       const rendererVar = this.coreVariables.get('beetle_psx_hw_renderer');
       if (rendererVar) {
         rendererVar.value = 'hardware_gl';
-        console.error('[libretro] Override: renderer = hardware_gl');
+        process.env.RETROEMU_DEBUG && console.error('[libretro] Override: renderer = hardware_gl');
       }
     }
   }

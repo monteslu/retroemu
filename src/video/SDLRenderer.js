@@ -29,7 +29,7 @@ export class SDLRenderer {
       fullscreen: this.fullscreen,
       opengl: this.opengl,
     });
-    console.error(`[sdl] window created: vsync=${this.window.vsync} accelerated=${this.window.accelerated}`);
+    process.env.RETROEMU_DEBUG && console.error(`[sdl] window created: vsync=${this.window.vsync} accelerated=${this.window.accelerated}`);
 
     this.window.on('close', () => {
       process.emit('SIGINT');
@@ -113,7 +113,7 @@ export class SDLRenderer {
     const copyMs = t1 - t0;
     const renderMs = t2 - t1;
     if (copyMs + renderMs > 14) {
-      console.error(`[sdl] SLOW copy=${copyMs.toFixed(1)}ms render=${renderMs.toFixed(1)}ms`);
+      process.env.RETROEMU_DEBUG && console.error(`[sdl] SLOW copy=${copyMs.toFixed(1)}ms render=${renderMs.toFixed(1)}ms`);
     }
   }
 
