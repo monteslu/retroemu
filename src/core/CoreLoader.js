@@ -7,14 +7,27 @@ const __dirname = path.dirname(__filename);
 const CORES_DIR = path.resolve(__dirname, '..', '..', 'cores');
 
 // Cores consumed from romdev's standalone, hardened npm packages instead of the bundled
-// cores/ dir. romdev maintains the canonical builds for these (glide64-GL N64, NODERAWFS
-// PS1, the GameTank core) — newer + better than what retroemu shipped, and this is the
-// convergence direction: stop building the same cores twice. Each package exports
-// `{ core: { jsPath, wasmPath } }`. Everything else still loads from CORES_DIR.
+// cores/ dir. romdev maintains the canonical, pinned+Dockerized builds — so retroemu stops
+// building/shipping the same cores twice (the convergence). Every core here that has a
+// published romdev-core-* / romdev-platform-* package loads from it; the cores/ dir only
+// keeps the retroemu-only cores romdev doesn't build (atari800, beetle_pce_fast, fmsx, fuse,
+// gearcoleco, mednafen_ngp/wswan, mupen64plus_next, pcsx_rearmed, snes9x2010, vecx).
+// Each package exports `{ core: { jsPath, wasmPath } }`. Keys are retroemu's core names
+// (which differ from romdev's package names: genesis_plus_gx→gpgx, snes9x→platform-snes, …).
 const CORE_PACKAGES = {
-  parallel_n64: 'romdev-core-parallel-n64',
+  fceumm: 'romdev-core-fceumm',
+  gambatte: 'romdev-core-gambatte',
+  genesis_plus_gx: 'romdev-core-gpgx',
+  handy: 'romdev-core-handy',
+  prosystem: 'romdev-core-prosystem',
+  vice_x64: 'romdev-core-vice',
   beetle_psx_hw: 'romdev-core-beetle-psx-hw',
+  parallel_n64: 'romdev-core-parallel-n64',
+  flycast: 'romdev-core-flycast',
   gametank: 'romdev-core-gametank',
+  snes9x: 'romdev-platform-snes',
+  mgba: 'romdev-platform-gba',
+  stella2014: 'romdev-platform-atari2600',
 };
 
 /** Resolve a core's glue-.js + .wasm paths — from a romdev package if mapped, else cores/. */

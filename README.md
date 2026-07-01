@@ -16,7 +16,7 @@ retroemu game.nes
 
 ## Supported Systems
 
-The emulator auto-detects systems by file extension. All cores are from the [libretro](https://www.libretro.com/) project, compiled to WebAssembly.
+The emulator auto-detects systems by file extension. All cores are from the [libretro](https://www.libretro.com/) project, compiled to WebAssembly. The mainstream cores (NES, SNES, Game Boy, Genesis, N64, PlayStation, GameTank, …) are consumed from [romdev](https://github.com/monteslu/romdev)'s pinned, hardened `romdev-core-*` / `romdev-platform-*` packages rather than built here — one shared set of core builds instead of two. The remaining, romdev-less cores (Atari 800, PC-Engine CD, MSX/fmsx, ZX Spectrum, ColecoVision, NGP, WonderSwan, mupen64plus-next, PCSX-ReARMed, snes9x2010, Vectrex) are still bundled in `cores/`.
 
 ### Nintendo
 
