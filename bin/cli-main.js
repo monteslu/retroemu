@@ -13,6 +13,12 @@ import { CartHost, BUTTON } from 'wasmcart';
 import { createHostSession as createJsGameSession } from 'rungame';
 import gl from 'native-gles';
 import { WebGL2RenderingContext } from 'webgl-node';
+import { SDL, shareSdl } from '../src/core/shared-sdl.js';
+
+// Force gamepad-node + webaudio-node onto retroemu's single @kmamal/sdl instance, so a
+// duplicate copy in the npm tree (common on a fresh macOS `npx` install) can't leave the
+// controller reading a DIFFERENT SDL event queue than the one retroemu pumps → dead input.
+shareSdl();
 
 // Parse arguments
 const args = process.argv.slice(2);
@@ -402,8 +408,11 @@ videoOutput.setDither(dither);
 
 const audioBridge = new AudioBridge();
 // NOTE: SDL window must be created (by VideoOutput.init) BEFORE InputManager
-// so that gamepad-node's controller init doesn't break window events
-const sdlInstance = videoOutput.getSDL();
+// so that gamepad-node's controller init doesn't break window events.
+// Always hand InputManager retroemu's shared SDL — videoOutput.getSDL() is null in
+// terminal mode (no SDL renderer), which used to let gamepad-node fall back to its own
+// @kmamal/sdl import (a different instance on a duplicated tree → dead controller).
+const sdlInstance = videoOutput.getSDL() || SDL;
 const inputManager = new InputManager({ disableGamepad, debugInput, sdl: sdlInstance });
 // Register SDL window for keyboard input when SDL video is active
 const sdlWindow = videoOutput.getSDLWindow();
@@ -828,6 +837,7 @@ async function startJsGame() {
   jsGameSession = await createJsGameSession(romPath, {
     width: preferredWidth || 640,
     height: preferredHeight || 480,
+    sdl: SDL, // share retroemu's SDL instance so the realm's controller/audio use the same one
   });
 
   const cw = jsGameSession.canvas.width, ch = jsGameSession.canvas.height;
