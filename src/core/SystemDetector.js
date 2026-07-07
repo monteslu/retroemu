@@ -87,6 +87,9 @@ const EXTENSION_MAP = {
   // JS games (run headless via rungame's createHostSession → the terminal/SDL pipeline)
   '.jsgame': { system: 'jsgame', core: 'jsgame' },
   '.jsg': { system: 'jsgame', core: 'jsgame' },
+  // PICO-8 carts via FAKE-08 (MIT, no BIOS). .p8 = Lua source; .p8.png = cart embedded
+  // in a label PNG (handled as a double-extension special-case in detectSystem).
+  '.p8': { system: 'pico8', core: 'fake08' },
 };
 
 const SYSTEM_NAMES = {
@@ -118,9 +121,22 @@ const SYSTEM_NAMES = {
   gametank: 'GameTank',
   wasmcart: 'WASM Cart',
   jsgame: 'JS Game',
+  pico8: 'PICO-8',
 };
 
 export function detectSystem(romPath) {
+  const lower = romPath.toLowerCase();
+  // PICO-8 carts can be embedded in a label PNG (`foo.p8.png`) — a DOUBLE extension
+  // that path.extname() sees only as `.png`. Special-case it before the normal lookup
+  // (FAKE-08 decodes the PNG-embedded cart itself; the host just passes the file).
+  if (lower.endsWith('.p8.png')) {
+    return {
+      system: 'pico8',
+      core: 'fake08',
+      systemName: SYSTEM_NAMES.pico8,
+      extension: '.p8.png',
+    };
+  }
   const ext = path.extname(romPath).toLowerCase();
   const entry = EXTENSION_MAP[ext];
   if (!entry) {

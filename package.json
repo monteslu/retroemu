@@ -1,6 +1,6 @@
 {
   "name": "retroemu",
-  "version": "0.4.7",
+  "version": "0.4.8",
   "description": "Terminal retro game emulator using libretro WASM cores",
   "type": "module",
   "main": "index.js",
@@ -47,6 +47,7 @@
     "native-gles": "^0.5.0",
     "romdev-audio-resampler": "^0.1.0",
     "romdev-core-beetle-psx-hw": "^0.2.0",
+    "romdev-core-fake08": "^0.1.0",
     "romdev-core-fceumm": "^0.11.0",
     "romdev-core-flycast": "^0.2.0",
     "romdev-core-gambatte": "^0.10.0",

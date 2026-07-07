@@ -28,6 +28,7 @@ const CORE_PACKAGES = {
   snes9x: 'romdev-platform-snes',
   mgba: 'romdev-platform-gba',
   stella2014: 'romdev-platform-atari2600',
+  fake08: 'romdev-core-fake08',
 };
 
 /** Resolve a core's glue-.js + .wasm paths — from a romdev package if mapped, else cores/. */
