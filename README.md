@@ -4,6 +4,7 @@ Terminal-based retro game emulator. Play classic console games directly in your 
 
 - **25+ retro systems** — NES, SNES, Game Boy, Genesis, Atari, and more
 - **Native game formats** — run [wasmcart](https://github.com/wasmcart/wasmcart) `.wasc` games (WASM, any language) and [jsgame](https://github.com/monteslu/jsgamelauncher) `.jsgame` JS games — rendered right in the terminal like everything else
+- **PICO-8** — play `.p8` and `.p8.png` carts via [FAKE-08](https://github.com/jtothebell/fake-08) (MIT, no BIOS); thousands of free community carts run as-is
 - **Multiple video outputs** — terminal (ANSI art), SDL window, or both simultaneously
 - **Truecolor ANSI rendering** — half-block characters for clean pixel art
 - **2100+ controllers supported** — via SDL2 with automatic mapping
@@ -16,7 +17,7 @@ retroemu game.nes
 
 ## Supported Systems
 
-The emulator auto-detects systems by file extension. All cores are from the [libretro](https://www.libretro.com/) project, compiled to WebAssembly. The mainstream cores (NES, SNES, Game Boy, Genesis, N64, PlayStation, GameTank, …) are consumed from [romdev](https://github.com/monteslu/romdev)'s pinned, hardened `romdev-core-*` / `romdev-platform-*` packages rather than built here — one shared set of core builds instead of two. The remaining, romdev-less cores (Atari 800, PC-Engine CD, MSX/fmsx, ZX Spectrum, ColecoVision, NGP, WonderSwan, mupen64plus-next, PCSX-ReARMed, snes9x2010, Vectrex) are still bundled in `cores/`.
+The emulator auto-detects systems by file extension. All cores are from the [libretro](https://www.libretro.com/) project, compiled to WebAssembly. The mainstream cores (NES, SNES, Game Boy, Genesis, N64, PlayStation, GameTank, PICO-8, …) are consumed from [romdev](https://github.com/monteslu/romdev)'s pinned, hardened `romdev-core-*` / `romdev-platform-*` packages rather than built here — one shared set of core builds instead of two. **PICO-8** (`.p8` / `.p8.png`) runs via the [FAKE-08](https://github.com/jtothebell/fake-08) core (MIT, no BIOS) at 128×128 with sound. The remaining, romdev-less cores (Atari 800, PC-Engine CD, MSX/fmsx, ZX Spectrum, ColecoVision, NGP, WonderSwan, mupen64plus-next, PCSX-ReARMed, snes9x2010, Vectrex) are still bundled in `cores/`.
 
 ### Nintendo
 
