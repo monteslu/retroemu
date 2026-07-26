@@ -300,6 +300,48 @@ export class LibretroHost {
     }
   }
 
+  // ── memory access (developer mode) ─────────────────────────────────
+  // The libretro memory API is the same surface cheats and RetroAchievements
+  // ride on; exposing it turns romdeck into something no other frontend is:
+  // a debugger you can point at a running game.
+
+  /** Which memory regions this core actually exposes, and how big they are. */
+  memoryInfo() {
+    if (!this.core) return [];
+    const REGIONS = [
+      { id: 0, name: 'save_ram' },
+      { id: 1, name: 'rtc' },
+      { id: 2, name: 'system_ram' },
+      { id: 3, name: 'video_ram' },
+    ];
+    return REGIONS.map((r) => ({
+      ...r,
+      size: this.core._retro_get_memory_size(r.id) >>> 0,
+      available: (this.core._retro_get_memory_data(r.id) >>> 0) !== 0,
+    })).filter((r) => r.available && r.size > 0);
+  }
+
+  readMemory(regionId, offset = 0, length = 256) {
+    if (!this.core) return null;
+    const ptr = this.core._retro_get_memory_data(regionId) >>> 0;
+    const size = this.core._retro_get_memory_size(regionId) >>> 0;
+    if (!ptr || !size) return null;
+    const start = Math.max(0, Math.min(offset, size));
+    const end = Math.min(size, start + Math.max(0, length));
+    return Buffer.from(this.core.HEAPU8.slice(ptr + start, ptr + end));
+  }
+
+  writeMemory(regionId, offset, bytes) {
+    if (!this.core) return 0;
+    const ptr = this.core._retro_get_memory_data(regionId) >>> 0;
+    const size = this.core._retro_get_memory_size(regionId) >>> 0;
+    if (!ptr || !size || offset < 0 || offset >= size) return 0;
+    const data = Uint8Array.from(bytes);
+    const n = Math.min(data.length, size - offset);
+    this.core.HEAPU8.set(data.subarray(0, n), ptr + offset);
+    return n;
+  }
+
   /**
    * Apply cheat codes. Codes go straight to the core via retro_cheat_set, so
    * whatever format that core accepts works — Game Genie, GameShark/PAR, raw

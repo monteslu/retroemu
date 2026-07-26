@@ -216,6 +216,32 @@ export class ControlChannel {
         return { frame: entry.frame, depth: this.rewind.depth };
       }
 
+      case 'memoryInfo':
+        return { regions: needHost().memoryInfo() };
+
+      case 'readMemory': {
+        const h = needHost();
+        const region = params.region ?? 2; // system RAM
+        const data = h.readMemory(region, params.offset ?? 0, params.length ?? 256);
+        if (!data) throw new Error('region unavailable on this core');
+        return {
+          region,
+          offset: params.offset ?? 0,
+          length: data.length,
+          dataB64: data.toString('base64'),
+        };
+      }
+
+      case 'writeMemory': {
+        const h = needHost();
+        const bytes = params.dataB64
+          ? Buffer.from(params.dataB64, 'base64')
+          : Uint8Array.from(params.bytes ?? []);
+        const written = h.writeMemory(params.region ?? 2, params.offset ?? 0, bytes);
+        if (!written) throw new Error('write rejected (bad region or offset)');
+        return { written };
+      }
+
       case 'setCheats': {
         const h = needHost();
         const applied = h.setCheats(params.cheats ?? []);
