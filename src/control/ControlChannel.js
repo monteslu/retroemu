@@ -27,6 +27,11 @@ export class ControlChannel {
    */
   constructor(ctx) {
     this.ctx = ctx;
+    // --ff-speed / --no-rewind come from the frontend's settings cascade.
+    // Rewind costs a full serializeState twice a second, so honouring the
+    // "off" choice is a real saving on heavy cores, not just a preference.
+    this.ffSpeed = Number.isFinite(ctx.ffSpeed) ? ctx.ffSpeed : 4;
+    this.rewindEnabled = ctx.rewindEnabled !== false;
     this.rewind = new RewindBuffer();
     this._lastFrame = null; // { rgba, width, height } — reference, not copy
     this._sentAutosave = false;
@@ -53,6 +58,7 @@ export class ControlChannel {
   attachHost(host) {
     // Rewind snapshots ride the host's frame hook.
     host.onFrameHook = (frameCount) => {
+      if (!this.rewindEnabled) return;
       if (frameCount % REWIND_INTERVAL_FRAMES !== 0) return;
       if (host.paused || host.speed !== 1) return; // don't snapshot ff/paused
       const data = host.serializeState();
@@ -141,6 +147,8 @@ export class ControlChannel {
           paused: host?.paused ?? false,
           speed: host?.speed ?? 1,
           rewindDepth: this.rewind.depth,
+          rewindEnabled: this.rewindEnabled,
+          ffSpeed: this.ffSpeed,
           fullscreen: this._sdlWindow()?.fullscreen ?? false,
         };
 

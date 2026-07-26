@@ -51,6 +51,8 @@ let joinCode = null;      // --join/--watch: remote play guest
 let watchOnly = false;
 let hostRemote = false;   // --host-remote: start hosting immediately
 let cheatList = null;     // --cheats: [{code, enabled, desc}]
+let ffSpeed = 4;          // --ff-speed: multiplier the overlay/frontend fast-forwards at
+let rewindEnabled = true; // --no-rewind: skip rewind snapshots entirely
 
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--save-dir' && args[i + 1]) {
@@ -97,6 +99,12 @@ for (let i = 0; i < args.length; i++) {
     hostRemote = true;
   } else if (args[i] === '--video-filter' && args[i + 1]) {
     videoFilter = args[++i];
+  } else if (args[i] === '--ff-speed' && args[i + 1]) {
+    // 0 = uncapped; anything else is clamped to the host's accepted range
+    const v = Number(args[++i]);
+    if (Number.isFinite(v) && v >= 0) ffSpeed = v;
+  } else if (args[i] === '--no-rewind') {
+    rewindEnabled = false;
   } else if (args[i] === '--cheats' && args[i + 1]) {
     const raw = args[++i];
     try {
@@ -578,6 +586,8 @@ try {
       shutdown,
       romPath,
       system,
+      ffSpeed,
+      rewindEnabled,
     });
   }
   if (isCart) {
@@ -1107,7 +1117,9 @@ function printUsage() {
   console.log(`  -f, --fullscreen     Start SDL window in fullscreen mode`);
   console.log(`  --control            Enable the IPC session channel (for frontends; spawn with stdio 'ipc')`);
   console.log(`  --input-map <json>   Controller remap: inline JSON or @file (per-device bindings + port order)`);
-  console.log(`  --video-filter <f>   CRT post-process: none, sharp, scanlines, crt (SDL modes)`);
+  console.log(`  --video-filter <f>   CRT post-process: none, sharp, scanlines, crt (SDL modes)
+  --ff-speed <n>       Fast-forward multiplier, 0=uncapped (default: 4)
+  --no-rewind          Disable rewind history (saves memory + per-frame work)`);
   console.log(`  --cheats <json>      Cheat codes: inline JSON or @file ([{code, enabled, desc}])`);
   console.log(`  --host-remote        Host this game for remote play; prints a share code`);
   console.log(`  --join <code>        Join a hosted game as player 2 (no ROM needed)`);
