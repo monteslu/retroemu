@@ -216,6 +216,25 @@ export class ControlChannel {
         return { frame: entry.frame, depth: this.rewind.depth };
       }
 
+      case 'setInputMap': {
+        // Live remap — takes effect on the next polled frame, no relaunch.
+        this.ctx.inputManager?.setRemap(params.map ?? null);
+        return { applied: !!params.map };
+      }
+
+      case 'listPads': {
+        const pads = (this.ctx.inputManager?.currentGamepads ?? []).filter(Boolean);
+        return {
+          pads: pads.map((p, port) => ({
+            port,
+            id: p.id,
+            key: p._native?.guid || p.guid || p.id,
+            buttons: p.buttons?.length ?? 0,
+            axes: p.axes?.length ?? 0,
+          })),
+        };
+      }
+
       case 'menu': {
         if (!this.overlay) throw new Error('no overlay (terminal video mode)');
         const op = params.op ?? 'toggle';

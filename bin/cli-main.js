@@ -1,7 +1,7 @@
 // retroemu main — the actual CLI. Loaded by bin/cli.js AFTER the jsgame re-exec
 // decision, so the heavy SDL/GL imports below init exactly once (no double-init crash on macOS).
 import { resolve, dirname, basename } from 'path';
-import { existsSync, writeFileSync } from 'fs';
+import { existsSync, writeFileSync, readFileSync } from 'fs';
 import { LibretroHost } from '../src/core/LibretroHost.js';
 import { VideoOutput } from '../src/video/VideoOutput.js';
 import { AudioBridge } from '../src/audio/AudioBridge.js';
@@ -45,6 +45,7 @@ let preferredHeight = 0;
 let fullscreen = false;
 let uncapped = false;
 let controlMode = false; // --control: IPC session channel for frontends (romdeck)
+let inputRemap = null;   // --input-map: per-device bindings + player order
 
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--save-dir' && args[i + 1]) {
@@ -84,6 +85,16 @@ for (let i = 0; i < args.length; i++) {
     uncapped = true;
   } else if (args[i] === '--control') {
     controlMode = true;
+  } else if (args[i] === '--input-map' && args[i + 1]) {
+    // JSON (inline or @path) describing per-device bindings + player order
+    const raw = args[++i];
+    try {
+      const text = raw.startsWith('@') ? readFileSync(raw.slice(1), 'utf8') : raw;
+      inputRemap = JSON.parse(text);
+    } catch (err) {
+      console.error(`--input-map: ${err.message}`);
+      process.exit(1);
+    }
   } else if (args[i] === '--help' || args[i] === '-h') {
     printUsage();
     process.exit(0);
@@ -416,7 +427,7 @@ const audioBridge = new AudioBridge();
 // terminal mode (no SDL renderer), which used to let gamepad-node fall back to its own
 // @kmamal/sdl import (a different instance on a duplicated tree → dead controller).
 const sdlInstance = videoOutput.getSDL() || SDL;
-const inputManager = new InputManager({ disableGamepad, debugInput, sdl: sdlInstance });
+const inputManager = new InputManager({ disableGamepad, debugInput, sdl: sdlInstance, remap: inputRemap });
 // Register SDL window for keyboard input when SDL video is active
 const sdlWindow = videoOutput.getSDLWindow();
 if (sdlWindow) {
@@ -533,6 +544,7 @@ try {
     controlChannel = new ControlChannel({
       getHost: () => host,
       videoOutput,
+      inputManager,
       shutdown,
       romPath,
       system,
@@ -1049,6 +1061,7 @@ function printUsage() {
   console.log(`  --res <WxH>          Preferred resolution for WASM carts (e.g. 800x600, 1280x720)`);
   console.log(`  -f, --fullscreen     Start SDL window in fullscreen mode`);
   console.log(`  --control            Enable the IPC session channel (for frontends; spawn with stdio 'ipc')`);
+  console.log(`  --input-map <json>   Controller remap: inline JSON or @file (per-device bindings + port order)`);
   console.log(``);
   console.log(`Terminal graphics options:`);
   console.log(`  --symbols <type>     Symbol set: block, half, ascii, ascii+block, solid,`);

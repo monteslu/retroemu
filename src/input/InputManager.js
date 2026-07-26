@@ -28,7 +28,43 @@ export class InputManager {
     this._sdlWindow = null;
     this._rawKeysDown = new Set(); // Raw SDL scancodes currently held
     this._rawKeysPrev = new Set(); // Previous frame's state
+
+    // Optional frontend-supplied remap:
+    //   { devices: { <guid|name>: { bindings: { <libretroId>: {type,index,dir} },
+    //                              deadzone } },
+    //     portOrder: [<guid|name>, ...] }
+    // Absent bindings fall back to the positional W3C defaults, so a partial
+    // remap only overrides what the user actually rebound.
+    this.remap = options.remap ?? null;
     this._setupKeyboard();
+  }
+
+  setRemap(remap) {
+    this.remap = remap ?? null;
+  }
+
+  /** Stable device key: SDL GUID when available, else the pad's name. */
+  static deviceKey(pad) {
+    return pad?._native?.guid || pad?.guid || pad?.id || 'unknown';
+  }
+
+  /** Order pads by the frontend's player assignment (unlisted pads follow). */
+  _orderPads(pads) {
+    const order = this.remap?.portOrder;
+    if (!order?.length) return pads;
+    const byKey = new Map();
+    for (const p of pads) {
+      const key = InputManager.deviceKey(p);
+      if (!byKey.has(key)) byKey.set(key, []);
+      byKey.get(key).push(p);
+    }
+    const out = [];
+    for (const key of order) {
+      const list = byKey.get(key);
+      if (list?.length) out.push(list.shift());
+    }
+    for (const list of byKey.values()) out.push(...list);
+    return out;
   }
 
   // Register SDL window for keyboard events (when SDL video is active)
@@ -117,7 +153,7 @@ export class InputManager {
         });
       }
 
-      this.currentGamepads = gamepads;
+      this.currentGamepads = this._orderPads(gamepads);
 
       // Start+Select combo: with an overlay registered it opens the menu at
       // ~0.5s (and a long 2s hold still hard-quits as a safety hatch);
@@ -185,6 +221,12 @@ export class InputManager {
   _getButtonState(gamepad, port, id) {
     // Gamepad input
     if (gamepad) {
+      // Frontend remap wins when this device has a binding for this button
+      const binding = this.remap
+        ? this.remap.devices?.[InputManager.deviceKey(gamepad)]?.bindings?.[id]
+        : null;
+      if (binding) return this._bindingActive(gamepad, binding);
+
       const w3cIndex = LIBRETRO_TO_W3C[id];
       if (w3cIndex >= 0 && w3cIndex < gamepad.buttons.length) {
         const btn = gamepad.buttons[w3cIndex];
@@ -208,6 +250,20 @@ export class InputManager {
       }
     }
 
+    return false;
+  }
+
+  /** Is a remapped source (button or axis direction) currently active? */
+  _bindingActive(gamepad, binding) {
+    if (binding.type === 'button') {
+      return !!gamepad.buttons?.[binding.index]?.pressed;
+    }
+    if (binding.type === 'axis') {
+      const value = gamepad.axes?.[binding.index];
+      if (value === undefined) return false;
+      const dz = this.remap?.devices?.[InputManager.deviceKey(gamepad)]?.deadzone ?? 0.35;
+      return binding.dir < 0 ? value < -dz : value > dz;
+    }
     return false;
   }
 
