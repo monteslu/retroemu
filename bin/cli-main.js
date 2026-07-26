@@ -44,6 +44,7 @@ let preferredWidth = 0;   // 0 = no preference (cart chooses)
 let preferredHeight = 0;
 let fullscreen = false;
 let uncapped = false;
+let controlMode = false; // --control: IPC session channel for frontends (romdeck)
 
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--save-dir' && args[i + 1]) {
@@ -81,6 +82,8 @@ for (let i = 0; i < args.length; i++) {
     fullscreen = true;
   } else if (args[i] === '--uncapped') {
     uncapped = true;
+  } else if (args[i] === '--control') {
+    controlMode = true;
   } else if (args[i] === '--help' || args[i] === '-h') {
     printUsage();
     process.exit(0);
@@ -437,6 +440,7 @@ if (useTerminal) {
 // Clean shutdown handler
 let shuttingDown = false;
 let host = null;
+let controlChannel = null;
 let cartHost = null;
 let cartRunning = false;
 let jsGameSession = null;
@@ -446,6 +450,12 @@ let _realGetGamepads = null; // real SDL getGamepads, saved before createHostSes
 async function shutdown() {
   if (shuttingDown) return;
   shuttingDown = true;
+
+  // Push the final state to the frontend (resume-on-next-launch) before
+  // tearing anything down.
+  if (controlChannel) {
+    try { await controlChannel.sendAutosave(); } catch { /* parent may be gone */ }
+  }
 
   if (cartHost) {
     cartRunning = false;
@@ -518,6 +528,16 @@ if (process.stdin.isTTY) {
 
 // Start
 try {
+  if (controlMode) {
+    const { ControlChannel } = await import('../src/control/ControlChannel.js');
+    controlChannel = new ControlChannel({
+      getHost: () => host,
+      videoOutput,
+      shutdown,
+      romPath,
+      system,
+    });
+  }
   if (isCart) {
     await startCart();
   } else if (isJsGame) {
@@ -530,7 +550,9 @@ try {
       saveManager,
     });
     await host.loadAndStart(romInfo.romPath, { saveDir, romData: romInfo.data });
+    if (controlChannel) controlChannel.attachHost(host);
   }
+  if (controlChannel) controlChannel.sendReady();
 } catch (err) {
   if (useTerminal) {
     process.stdout.write('\x1b[?1049l\x1b[?25h');
@@ -1010,6 +1032,7 @@ function printUsage() {
   console.log(`  --scale <n>          SDL window scale factor (default: 2)`);
   console.log(`  --res <WxH>          Preferred resolution for WASM carts (e.g. 800x600, 1280x720)`);
   console.log(`  -f, --fullscreen     Start SDL window in fullscreen mode`);
+  console.log(`  --control            Enable the IPC session channel (for frontends; spawn with stdio 'ipc')`);
   console.log(``);
   console.log(`Terminal graphics options:`);
   console.log(`  --symbols <type>     Symbol set: block, half, ascii, ascii+block, solid,`);

@@ -72,6 +72,11 @@ export class LibretroHost {
     // Frame counter
     this._frameCount = 0;
 
+    // Session controls (driven by ControlChannel or hotkeys)
+    this.paused = false;
+    this.speed = 1; // 1 = normal, >1 = fast-forward, 0 = uncapped
+    this.onFrameHook = null; // called with (frameCount) after each executed frame
+
     // Hardware rendering support
     this.hwRender = new LibretroGL();
   }
@@ -216,6 +221,44 @@ export class LibretroHost {
     this.running = false;
   }
 
+  pause() {
+    this.paused = true;
+  }
+
+  resume() {
+    this.paused = false;
+  }
+
+  setSpeed(x) {
+    this.speed = x;
+  }
+
+  /** Serialize core state → Buffer, or null if the core doesn't support it. */
+  serializeState() {
+    if (!this.core) return null;
+    const size = this.core._retro_serialize_size();
+    if (!size) return null;
+    const ptr = this.core._malloc(size);
+    try {
+      if (!this.core._retro_serialize(ptr, size)) return null;
+      return Buffer.from(this.core.HEAPU8.slice(ptr, ptr + size));
+    } finally {
+      this.core._free(ptr);
+    }
+  }
+
+  /** Restore a state produced by serializeState. Returns success. */
+  unserializeState(data) {
+    if (!this.core || !data?.length) return false;
+    const ptr = this.core._malloc(data.length);
+    try {
+      this.core.HEAPU8.set(data, ptr);
+      return !!this.core._retro_unserialize(ptr, data.length);
+    } finally {
+      this.core._free(ptr);
+    }
+  }
+
   async shutdown() {
     this.stop();
 
@@ -302,13 +345,17 @@ export class LibretroHost {
     mod._retro_set_video_refresh(videoCb);
 
     // Audio sample batch: "iii" → (const int16_t* data, size_t frames) → size_t
+    // Muted during fast-forward/uncapped runs — pushing 4x audio just backlogs
+    // the bridge and screeches.
     const audioBatchCb = mod.addFunction((dataPtr, frames) => {
+      if (this.speed !== 1) return frames;
       return this.audioBridge.onAudioBatch(mod, dataPtr, frames);
     }, 'iii');
     mod._retro_set_audio_sample_batch(audioBatchCb);
 
     // Audio single sample: "vii" → (int16_t left, int16_t right)
     const audioSampleCb = mod.addFunction((left, right) => {
+      if (this.speed !== 1) return;
       this.audioBridge.onAudioSample(left, right);
     }, 'vii');
     mod._retro_set_audio_sample(audioSampleCb);
@@ -599,17 +646,32 @@ export class LibretroHost {
 
   _runLoop() {
     const fps = this.systemAVInfo.timing.fps;
-    const frameDurationMs = 1000 / fps;
+    const baseFrameDurationMs = 1000 / fps;
     let lastFrameTime = performance.now();
 
     const tick = () => {
       if (!this.running) return;
 
+      // Paused: keep the loop (and SDL event pump via input polling) alive
+      // without running the core. Cheap idle at ~20Hz.
+      if (this.paused) {
+        try { this.inputManager.poll(); } catch { /* input optional while paused */ }
+        lastFrameTime = performance.now();
+        setTimeout(tick, 50);
+        return;
+      }
+
+      // speed 0 = uncapped, otherwise scale the frame budget
+      const uncapped = this.speed === 0;
+      const frameDurationMs = uncapped
+        ? 0
+        : baseFrameDurationMs / (this.speed || 1);
+
       const now = performance.now();
       const elapsed = now - lastFrameTime;
 
-      if (elapsed >= frameDurationMs) {
-        lastFrameTime = now - (elapsed % frameDurationMs);
+      if (uncapped || elapsed >= frameDurationMs) {
+        lastFrameTime = uncapped ? now : now - (elapsed % frameDurationMs);
         this.core._retro_run();
         this._frameCount++;
 
@@ -621,11 +683,15 @@ export class LibretroHost {
             this.videoOutput.onCartFrameRGBA(frame.pixels, frame.width, frame.height);
           }
         }
+
+        if (this.onFrameHook) {
+          try { this.onFrameHook(this._frameCount); } catch { /* hook errors never kill the loop */ }
+        }
       }
 
       // Frame pacing: use setTimeout for coarse timing, setImmediate for tight timing
       const remaining = frameDurationMs - (performance.now() - lastFrameTime);
-      if (remaining > 2) {
+      if (!uncapped && remaining > 2) {
         setTimeout(tick, Math.floor(remaining) - 1);
       } else {
         setImmediate(tick);
