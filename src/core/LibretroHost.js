@@ -300,6 +300,27 @@ export class LibretroHost {
     }
   }
 
+  /**
+   * Apply cheat codes. Codes go straight to the core via retro_cheat_set, so
+   * whatever format that core accepts works — Game Genie, GameShark/PAR, raw
+   * address:value — without us decoding anything.
+   * @param {Array<{code:string, enabled?:boolean}>} cheats
+   */
+  setCheats(cheats = []) {
+    if (!this.core?._retro_cheat_set) return 0;
+    this.core._retro_cheat_reset();
+    let applied = 0;
+    for (const entry of cheats) {
+      const code = String(entry?.code ?? '').trim();
+      if (!code) continue;
+      const ptr = this._allocString(code);
+      this.core._retro_cheat_set(applied, entry.enabled === false ? 0 : 1, ptr);
+      applied++;
+    }
+    this.activeCheats = cheats;
+    return applied;
+  }
+
   // --- Private methods ---
 
   _applyCoreOverrides() {

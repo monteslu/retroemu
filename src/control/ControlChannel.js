@@ -216,6 +216,43 @@ export class ControlChannel {
         return { frame: entry.frame, depth: this.rewind.depth };
       }
 
+      case 'setCheats': {
+        const h = needHost();
+        const applied = h.setCheats(params.cheats ?? []);
+        return { applied };
+      }
+
+      case 'listCoreOptions': {
+        const h = needHost();
+        const out = [];
+        for (const [key, v] of h.coreVariables) {
+          out.push({
+            key,
+            description: v.description ?? key,
+            options: v.options ?? [],
+            value: v.value,
+          });
+        }
+        return { options: out };
+      }
+
+      case 'setCoreOption': {
+        const h = needHost();
+        const v = h.coreVariables.get(params.key);
+        if (!v) throw new Error(`unknown core option: ${params.key}`);
+        if (v.options?.length && !v.options.includes(params.value)) {
+          throw new Error(`invalid value for ${params.key}: ${params.value}`);
+        }
+        v.value = params.value;
+        h.variablesUpdated = true; // core re-reads on its next GET_VARIABLE
+        return { key: params.key, value: params.value };
+      }
+
+      case 'setVideoFilter': {
+        this.ctx.videoOutput?.setFilter?.(params.filter ?? 'none');
+        return { filter: params.filter ?? 'none' };
+      }
+
       case 'setInputMap': {
         // Live remap — takes effect on the next polled frame, no relaunch.
         this.ctx.inputManager?.setRemap(params.map ?? null);

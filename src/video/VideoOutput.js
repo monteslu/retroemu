@@ -7,6 +7,7 @@ import {
   RETRO_PIXEL_FORMAT_RGB565,
 } from '../constants/libretro.js';
 import { SDLRenderer } from './SDLRenderer.js';
+import { applyFilter, isFilter } from './filters.js';
 
 // Pre-computed lookup tables for RGB565 → RGB8 conversion
 const RGB5_TO_8 = new Uint8Array(32);
@@ -135,6 +136,13 @@ export class VideoOutput {
     this.contrast = Math.max(0.5, Math.min(3.0, value));
   }
 
+  /** CRT-style post-process on the SDL output: none | sharp | scanlines | crt */
+  setFilter(name) {
+    this.filter = isFilter(name) ? name : 'none';
+    this._filterBuf = null; // size changes with the filter
+    return this.filter;
+  }
+
   setSymbols(symbols) {
     const validSymbols = ['block', 'half', 'ascii', 'ascii+block', 'solid', 'stipple', 'quad', 'sextant', 'octant', 'braille', 'matrix'];
     this.symbols = validSymbols.includes(symbols) ? symbols : 'block';
@@ -171,9 +179,17 @@ export class VideoOutput {
     // Convert to RGBA on main thread
     const rgbaData = this._convertToRGBA(wasmModule, dataPtr, width, height, pitch, pixelFormat);
 
-    // SDL rendering (every frame for smoothness)
+    // SDL rendering (every frame for smoothness). The CRT/scanline filter
+    // upscales 2x on its way to the texture; the terminal path and the frame
+    // callback keep the unfiltered image (screenshots stay native-res).
     if (useSDL && this.sdlRenderer) {
-      this.sdlRenderer.render(rgbaData, width, height);
+      if (this.filter && this.filter !== 'none') {
+        const f = applyFilter(rgbaData, width, height, this.filter, this._filterBuf);
+        this._filterBuf = f.pixels;
+        this.sdlRenderer.render(f.pixels, f.width, f.height);
+      } else {
+        this.sdlRenderer.render(rgbaData, width, height);
+      }
     }
 
     // Frame callback for external consumers (future vibe-eyes integration)

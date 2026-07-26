@@ -46,6 +46,8 @@ let fullscreen = false;
 let uncapped = false;
 let controlMode = false; // --control: IPC session channel for frontends (romdeck)
 let inputRemap = null;   // --input-map: per-device bindings + player order
+let videoFilter = 'none'; // --video-filter: none | sharp | scanlines | crt
+let cheatList = null;     // --cheats: [{code, enabled, desc}]
 
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--save-dir' && args[i + 1]) {
@@ -85,6 +87,16 @@ for (let i = 0; i < args.length; i++) {
     uncapped = true;
   } else if (args[i] === '--control') {
     controlMode = true;
+  } else if (args[i] === '--video-filter' && args[i + 1]) {
+    videoFilter = args[++i];
+  } else if (args[i] === '--cheats' && args[i + 1]) {
+    const raw = args[++i];
+    try {
+      cheatList = JSON.parse(raw.startsWith('@') ? readFileSync(raw.slice(1), 'utf8') : raw);
+    } catch (err) {
+      console.error(`--cheats: ${err.message}`);
+      process.exit(1);
+    }
   } else if (args[i] === '--input-map' && args[i + 1]) {
     // JSON (inline or @path) describing per-device bindings + player order
     const raw = args[++i];
@@ -413,6 +425,7 @@ if (glUseWindowSurface) {
   gl.glViewport(0, 0, glFBOW, glFBOH);
   } // end if (!glNoFBORedirect)
 }
+videoOutput.setFilter(videoFilter);
 videoOutput.setFrameSkip(frameSkip);
 videoOutput.setContrast(contrast);
 videoOutput.setSymbols(symbols);
@@ -562,6 +575,10 @@ try {
       saveManager,
     });
     await host.loadAndStart(romInfo.romPath, { saveDir, romData: romInfo.data });
+    if (cheatList?.length) {
+      const applied = host.setCheats(cheatList);
+      dlog(`[cheats] applied ${applied}`);
+    }
     if (controlChannel) controlChannel.attachHost(host);
 
     // In-game overlay menu (SDL modes only): Start+Select or ESC
@@ -1062,6 +1079,8 @@ function printUsage() {
   console.log(`  -f, --fullscreen     Start SDL window in fullscreen mode`);
   console.log(`  --control            Enable the IPC session channel (for frontends; spawn with stdio 'ipc')`);
   console.log(`  --input-map <json>   Controller remap: inline JSON or @file (per-device bindings + port order)`);
+  console.log(`  --video-filter <f>   CRT post-process: none, sharp, scanlines, crt (SDL modes)`);
+  console.log(`  --cheats <json>      Cheat codes: inline JSON or @file ([{code, enabled, desc}])`);
   console.log(``);
   console.log(`Terminal graphics options:`);
   console.log(`  --symbols <type>     Symbol set: block, half, ascii, ascii+block, solid,`);
