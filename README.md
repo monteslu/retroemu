@@ -206,9 +206,16 @@ Frontend integration:
   --control            Enable the IPC session channel (spawn with stdio 'ipc')
   --input-map <json>   Controller remap: inline JSON or @file — per-device
                        bindings keyed by SDL GUID, plus player port order
+  --cheats <json>      Cheat codes: inline JSON or @file
+                       ([{code, enabled, desc}]; the core decodes the format)
+  --video-filter <f>   CRT post-process: none, sharp, scanlines, crt (SDL modes)
+  --ff-speed <n>       Fast-forward multiplier, 0 = uncapped (default: 4)
+  --no-rewind          Disable rewind history (saves memory + per-frame work)
 
 Other:
+  --uncapped           Run as fast as the host allows (no 60 FPS cap)
   --no-gamepad         Disable gamepad input (keyboard only)
+  --debug-input        Log raw SDL controller events (diagnosing dead pads)
   -h, --help           Show help
 ```
 
@@ -526,6 +533,52 @@ host.writeMemory(2, 0x0010, [0xde, 0xad]);
 
 `host.onFrameHook` fires after every executed frame (rewind uses it), and
 `AudioBridge.onPcm` taps the PCM going to the speakers (remote play uses it).
+
+#### The `--control` wire protocol
+
+A frontend does not import any of the above. It spawns retroemu with an IPC
+channel and speaks JSON-RPC over it, which is what keeps a crashing core from
+taking the frontend down with it:
+
+```javascript
+const child = spawn('retroemu', [rom, '--video', 'sdl', '--control'],
+  { stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
+```
+
+```
+parent → child   { id, method, params }
+child  → parent  { id, result }  |  { id, error }
+child  → parent  { event, ...payload }        // unsolicited
+```
+
+**Methods**
+
+| Group | Methods |
+|---|---|
+| Lifecycle | `getStatus`, `pause`, `resume`, `reset`, `quit` |
+| State | `saveState`, `loadState`, `rewind` |
+| Presentation | `screenshot`, `setFullscreen`, `setVideoFilter`, `setSpeed`, `menu` |
+| Input | `listPads`, `setInputMap` |
+| Core | `listCoreOptions`, `setCoreOption`, `setCheats` |
+| Memory | `memoryInfo`, `readMemory`, `writeMemory` |
+| Remote play | `remoteHost`, `remoteStop`, `remoteStatus` |
+
+**Events**
+
+| Event | When |
+|---|---|
+| `ready` | host is up; carries platform, core and AV info |
+| `autosave` | final state blob, pushed **before** teardown so the frontend can persist a resume point |
+| `remote` | remote-play session state changed |
+
+Binary payloads cross the channel as **base64**, since IPC messages are JSON.
+`saveState` returns `{ stateB64, screenshotPngB64, frameCount, size }`,
+`loadState` expects that same `stateB64` back as a param, and `screenshot`
+returns `{ pngB64, width, height }`. Decode with
+`Buffer.from(stateB64, 'base64')`.
+
+Non-libretro sessions (wasmcart, jsgame) accept the channel but report
+`stateSupported: false` — save states are a libretro feature.
 
 ### Remote play
 

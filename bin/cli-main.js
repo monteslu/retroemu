@@ -1115,6 +1115,7 @@ function printUsage() {
   console.log(`  --scale <n>          SDL window scale factor (default: 2)`);
   console.log(`  --res <WxH>          Preferred resolution for WASM carts (e.g. 800x600, 1280x720)`);
   console.log(`  -f, --fullscreen     Start SDL window in fullscreen mode`);
+  console.log(`  --uncapped           Run as fast as the host allows (no 60 FPS cap)`);
   console.log(`  --control            Enable the IPC session channel (for frontends; spawn with stdio 'ipc')`);
   console.log(`  --input-map <json>   Controller remap: inline JSON or @file (per-device bindings + port order)`);
   console.log(`  --video-filter <f>   CRT post-process: none, sharp, scanlines, crt (SDL modes)
@@ -1134,6 +1135,7 @@ function printUsage() {
   console.log(``);
   console.log(`Other:`);
   console.log(`  --no-gamepad         Disable gamepad input (keyboard only)`);
+  console.log(`  --debug-input        Log raw SDL controller events (diagnosing dead pads)`);
   console.log(`  -h, --help           Show this help`);
   console.log(``);
   console.log(`ROM files can be provided directly or inside a .zip archive.`);
