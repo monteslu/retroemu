@@ -51,6 +51,31 @@ export class ControlChannel {
     };
   }
 
+  /**
+   * What this session actually supports.
+   *
+   * A libretro session has the full surface. wasmcart and jsgame carts run
+   * their own frame loop with no serialize/pause/memory API, so a frontend
+   * needs to know that up front rather than discovering it one thrown RPC at
+   * a time.
+   */
+  _capabilities() {
+    const host = this.ctx.getHost?.() ?? null;
+    return {
+      pause: !!host,
+      saveState: !!host,
+      rewind: !!host && this.rewindEnabled,
+      cheats: !!host,
+      memory: !!host,
+      coreOptions: !!host,
+      // Presentation is owned by the player process either way.
+      screenshot: true,
+      fullscreen: true,
+      videoFilter: true,
+      remotePlay: true,
+    };
+  }
+
   setOverlay(overlay) {
     this.overlay = overlay;
   }
@@ -150,6 +175,12 @@ export class ControlChannel {
           rewindEnabled: this.rewindEnabled,
           ffSpeed: this.ffSpeed,
           fullscreen: this._sdlWindow()?.fullscreen ?? false,
+          // wasmcart and jsgame sessions drive their own loop, so the
+          // libretro-shaped controls below don't apply to them. Saying so
+          // here lets a frontend grey out what it can't use instead of
+          // offering buttons that throw.
+          kind: host ? 'libretro' : (this.ctx.system?.system ?? 'cart'),
+          capabilities: this._capabilities(),
         };
 
       case 'pause':
