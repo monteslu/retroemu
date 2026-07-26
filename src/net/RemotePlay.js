@@ -15,6 +15,9 @@
 // deflated. A static screen costs almost nothing; a scrolling one costs a
 // few KB. Keyframes every 2s so a late joiner syncs quickly.
 import { deflateSync, inflateSync } from 'node:zlib';
+import {
+  REMOTE_RATE, downmix, upmix, encodeChunk, decodeChunk, AudioPacketizer,
+} from './audio.js';
 
 const KEYFRAME_EVERY = 40; // frames between full sends
 const DEFAULT_FPS = 20;
@@ -69,9 +72,17 @@ export function unpackPad(bytes) {
 
 // ── host ─────────────────────────────────────────────────────────────
 export class RemoteHost {
-  constructor({ videoOutput, inputManager, guestPort = 1, fps = DEFAULT_FPS, log = () => {} }) {
+  constructor({
+    videoOutput, inputManager, audioBridge = null, guestPort = 1,
+    fps = DEFAULT_FPS, audio = true, log = () => {},
+  }) {
     this.videoOutput = videoOutput;
     this.inputManager = inputManager;
+    this.audioBridge = audioBridge;
+    this.audioEnabled = audio;
+    this.audioBytes = 0;
+    this._prevOnPcm = null;
+    this._packetizer = null;
     this.guestPort = guestPort;
     this.minInterval = 1000 / fps;
     this.log = log;
@@ -99,6 +110,22 @@ export class RemoteHost {
       this._onFrame(rgba, w, h);
       if (this._prevOnFrame) this._prevOnFrame(rgba, w, h);
     };
+
+    // Tap the audio path the same way (chained, so local sound is unaffected).
+    if (this.audioEnabled && this.audioBridge) {
+      this._packetizer = new AudioPacketizer({
+        onPacket: (mono) => this._sendAudio(mono),
+      });
+      this._prevOnPcm = this.audioBridge.onPcm;
+      this.audioBridge.onPcm = (buffer, rate) => {
+        if (this._readyPeers().length) {
+          try {
+            this._packetizer.push(downmix(buffer, rate));
+          } catch { /* a malformed chunk must never break local audio */ }
+        }
+        if (this._prevOnPcm) this._prevOnPcm(buffer, rate);
+      };
+    }
 
     this.log(`[remote] hosting as ${this.code}`);
     return { code: this.code, hostName: this.con.myHostName, url: this.con.webUrl };
@@ -128,6 +155,21 @@ export class RemoteHost {
     const drop = () => this._detach(peer);
     peer.rtcEvents?.on?.('closed', drop);
     peer.rtcEvents?.on?.('disconnected', drop);
+  }
+
+  _sendAudio(mono) {
+    // Each packet carries its own ADPCM start state, so a lost packet costs
+    // one click rather than desyncing the decoder for the rest of the session.
+    const pkt = encodeChunk(mono, this._adpcm ?? { predictor: 0, index: 0 });
+    this._adpcm = pkt.next;
+    this.audioBytes += pkt.b.length;
+    for (const peer of this._readyPeers()) {
+      try {
+        peer.sendJSONMsg?.({ topic: 'a', rate: REMOTE_RATE, b: pkt.b, n: pkt.n, p: pkt.p, x: pkt.x });
+      } catch {
+        // Audio is expendable: a dropped packet is a click, not a disconnect.
+      }
+    }
   }
 
   /** Peers whose data channel is actually open. */
@@ -207,11 +249,14 @@ export class RemoteHost {
       guests: this.peers.size,
       framesSent: this.frameNo,
       kbSent: Math.round(this.bytesSent / 1024),
+      audio: this.audioEnabled && !!this.audioBridge,
+      audioKbSent: Math.round(this.audioBytes / 1024),
     };
   }
 
   async stop() {
     if (this._prevOnFrame !== null) this.videoOutput.onFrameCallback = this._prevOnFrame;
+    if (this.audioBridge && this._packetizer) this.audioBridge.onPcm = this._prevOnPcm;
     for (const peer of this.peers) {
       try { peer.sendJSONMsg?.({ topic: 'bye' }); } catch { /* going away anyway */ }
     }
@@ -225,8 +270,10 @@ export class RemoteHost {
 
 // ── guest ────────────────────────────────────────────────────────────
 export class RemoteGuest {
-  constructor({ onFrame, getPad, watchOnly = false, log = () => {} }) {
+  constructor({ onFrame, onAudio = null, getPad, watchOnly = false, log = () => {} }) {
     this.onFrame = onFrame; // (rgba, w, h) => void
+    this.onAudio = onAudio; // (stereoBuffer, dstRate) => void
+    this.audioPackets = 0;
     this.getPad = getPad; // () => gamepad-like | null
     this.watchOnly = watchOnly;
     this.log = log;
@@ -264,6 +311,14 @@ export class RemoteGuest {
 
   _onMessage(msg) {
     if (msg?.topic === 'bye') return this.stop();
+    if (msg?.topic === 'a') {
+      if (!this.onAudio || !msg.b) return;
+      try {
+        this.audioPackets++;
+        this.onAudio(decodeChunk(msg.n !== undefined ? msg : msg.b));
+      } catch { /* a bad audio packet is a click, nothing more */ }
+      return;
+    }
     if (msg?.topic !== 'v' || msg.b === undefined) return;
 
     // Reassemble the chunked frame; a frame that arrives incomplete (peer
@@ -297,7 +352,12 @@ export class RemoteGuest {
   }
 
   status() {
-    return { joined: !!this.peer, framesReceived: this.framesReceived, watchOnly: this.watchOnly };
+    return {
+      joined: !!this.peer,
+      framesReceived: this.framesReceived,
+      audioPackets: this.audioPackets,
+      watchOnly: this.watchOnly,
+    };
   }
 
   async stop() {

@@ -574,6 +574,7 @@ try {
       getHost: () => host,
       videoOutput,
       inputManager,
+      audioBridge,
       shutdown,
       romPath,
       system,
@@ -616,7 +617,7 @@ try {
     // --host-remote without a frontend: start hosting and print the code.
     if (hostRemote) {
       const { RemoteHost } = await import('../src/net/RemotePlay.js');
-      remoteHost = new RemoteHost({ videoOutput, inputManager, log: (m) => console.log(m) });
+      remoteHost = new RemoteHost({ videoOutput, inputManager, audioBridge, log: (m) => console.log(m) });
       const info = await remoteHost.start();
       console.log(`\n  Share code: ${info.code}`);
       console.log(`  Player 2:   npx retroemu --join ${info.code}`);

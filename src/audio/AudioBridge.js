@@ -68,6 +68,8 @@ export class AudioBridge {
     }
 
     this.device.enqueue(buffer);
+    // Remote play taps the same PCM that goes to the speakers.
+    if (this.onPcm) this.onPcm(buffer, this.sampleRate);
 
     return frames;
   }
@@ -82,6 +84,13 @@ export class AudioBridge {
     buffer.writeInt16LE(right, 2);
 
     this.device.enqueue(buffer);
+    if (this.onPcm) this.onPcm(buffer, this.sampleRate);
+  }
+
+  /** Push externally-produced PCM (remote play guest) straight to the device. */
+  enqueuePcm(buffer) {
+    if (!this.initialized || !buffer?.length) return;
+    this.device.enqueue(Buffer.from(buffer));
   }
 
   destroy() {

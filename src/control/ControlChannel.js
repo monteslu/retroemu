@@ -222,6 +222,8 @@ export class ControlChannel {
         this.remoteHost = new RemoteHost({
           videoOutput: this.ctx.videoOutput,
           inputManager: this.ctx.inputManager,
+          audioBridge: this.ctx.audioBridge,
+          audio: params.audio !== false,
           guestPort: params.guestPort ?? 1,
           fps: params.fps ?? 20,
           log: (m) => this._send({ event: 'remote', line: m }),
