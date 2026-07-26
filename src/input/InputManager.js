@@ -43,6 +43,17 @@ export class InputManager {
     this.remap = remap ?? null;
   }
 
+  /**
+   * Remote play: a guest's controller occupies a port like any local pad.
+   * Pass null to release the port (guest left → that player goes idle).
+   * The emulator never learns the difference.
+   */
+  setRemoteInput(port, pad) {
+    this._remotePads ??= new Map();
+    if (pad) this._remotePads.set(port, pad);
+    else this._remotePads.delete(port);
+  }
+
   /** Stable device key: SDL GUID when available, else the pad's name. */
   static deviceKey(pad) {
     return pad?._native?.guid || pad?.guid || pad?.id || 'unknown';
@@ -178,8 +189,9 @@ export class InputManager {
   }
 
   getState(port, device, index, id) {
-    // Try gamepad first, fall back to keyboard for port 0
-    const gamepad = this.currentGamepads[port];
+    // Try gamepad first, fall back to keyboard for port 0.
+    // A remote guest's pad takes the port it was assigned.
+    const gamepad = this._remotePads?.get(port) ?? this.currentGamepads[port];
 
     if (device === RETRO_DEVICE_JOYPAD) {
       // Handle bitmask query (all buttons at once)

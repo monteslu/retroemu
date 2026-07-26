@@ -216,6 +216,29 @@ export class ControlChannel {
         return { frame: entry.frame, depth: this.rewind.depth };
       }
 
+      case 'remoteHost': {
+        if (this.remoteHost) return this.remoteHost.status();
+        const { RemoteHost } = await import('../net/RemotePlay.js');
+        this.remoteHost = new RemoteHost({
+          videoOutput: this.ctx.videoOutput,
+          inputManager: this.ctx.inputManager,
+          guestPort: params.guestPort ?? 1,
+          fps: params.fps ?? 20,
+          log: (m) => this._send({ event: 'remote', line: m }),
+        });
+        const info = await this.remoteHost.start();
+        return { ...info, ...this.remoteHost.status() };
+      }
+
+      case 'remoteStatus':
+        return this.remoteHost ? this.remoteHost.status() : { hosting: false };
+
+      case 'remoteStop': {
+        await this.remoteHost?.stop();
+        this.remoteHost = null;
+        return { hosting: false };
+      }
+
       case 'memoryInfo':
         return { regions: needHost().memoryInfo() };
 

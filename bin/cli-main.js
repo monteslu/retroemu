@@ -47,6 +47,9 @@ let uncapped = false;
 let controlMode = false; // --control: IPC session channel for frontends (romdeck)
 let inputRemap = null;   // --input-map: per-device bindings + player order
 let videoFilter = 'none'; // --video-filter: none | sharp | scanlines | crt
+let joinCode = null;      // --join/--watch: remote play guest
+let watchOnly = false;
+let hostRemote = false;   // --host-remote: start hosting immediately
 let cheatList = null;     // --cheats: [{code, enabled, desc}]
 
 for (let i = 0; i < args.length; i++) {
@@ -87,6 +90,11 @@ for (let i = 0; i < args.length; i++) {
     uncapped = true;
   } else if (args[i] === '--control') {
     controlMode = true;
+  } else if ((args[i] === '--join' || args[i] === '--watch') && args[i + 1]) {
+    joinCode = args[++i];
+    watchOnly = args[i - 1] === '--watch';
+  } else if (args[i] === '--host-remote') {
+    hostRemote = true;
   } else if (args[i] === '--video-filter' && args[i + 1]) {
     videoFilter = args[++i];
   } else if (args[i] === '--cheats' && args[i + 1]) {
@@ -113,6 +121,13 @@ for (let i = 0; i < args.length; i++) {
   } else if (!args[i].startsWith('-')) {
     romPath = resolve(args[i]);
   }
+}
+
+// Remote play guest: no ROM, no core — the host is emulating. Hand off.
+if (joinCode) {
+  const { runJoin } = await import('./join.js');
+  await runJoin(joinCode, { watchOnly, scale: sdlScale || 3 });
+  await new Promise(() => {}); // stay alive until the window closes
 }
 
 if (!romPath) {
@@ -465,6 +480,7 @@ if (useTerminal) {
 let shuttingDown = false;
 let host = null;
 let controlChannel = null;
+let remoteHost = null;
 let cartHost = null;
 let cartRunning = false;
 let jsGameSession = null;
@@ -595,6 +611,16 @@ try {
       inputManager.onMenu = () => overlay.toggle();
       inputManager.menuKeyRouter = (name) => overlay.key(name);
       if (controlChannel) controlChannel.setOverlay(overlay);
+    }
+
+    // --host-remote without a frontend: start hosting and print the code.
+    if (hostRemote) {
+      const { RemoteHost } = await import('../src/net/RemotePlay.js');
+      remoteHost = new RemoteHost({ videoOutput, inputManager, log: (m) => console.log(m) });
+      const info = await remoteHost.start();
+      console.log(`\n  Share code: ${info.code}`);
+      console.log(`  Player 2:   npx retroemu --join ${info.code}`);
+      console.log(`  Spectators: npx retroemu --watch ${info.code}\n`);
     }
   }
   if (controlChannel) controlChannel.sendReady();
@@ -1081,6 +1107,9 @@ function printUsage() {
   console.log(`  --input-map <json>   Controller remap: inline JSON or @file (per-device bindings + port order)`);
   console.log(`  --video-filter <f>   CRT post-process: none, sharp, scanlines, crt (SDL modes)`);
   console.log(`  --cheats <json>      Cheat codes: inline JSON or @file ([{code, enabled, desc}])`);
+  console.log(`  --host-remote        Host this game for remote play; prints a share code`);
+  console.log(`  --join <code>        Join a hosted game as player 2 (no ROM needed)`);
+  console.log(`  --watch <code>       Watch a hosted game (spectator, no input sent)`);
   console.log(``);
   console.log(`Terminal graphics options:`);
   console.log(`  --symbols <type>     Symbol set: block, half, ascii, ascii+block, solid,`);
