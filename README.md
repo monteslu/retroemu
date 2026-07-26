@@ -185,6 +185,28 @@ Terminal graphics options:
   --fg-only            Foreground color only (black background)
   --dither             Enable Floyd-Steinberg dithering
 
+Picture:
+  --video-filter <f>   CRT post-process for SDL modes:
+                       none (default), sharp, scanlines, crt
+  --fullscreen, -f     Start the SDL window fullscreen
+
+Gameplay:
+  --cheats <json>      Cheat codes: inline JSON or @file
+                       [{ "code": "SXIOPO", "enabled": true, "desc": "..." }]
+                       Codes go straight to the core, so Game Genie,
+                       GameShark/PAR and raw address:value all work wherever
+                       that core supports them.
+
+Remote play ("a very long couch"):
+  --host-remote        Host this game; prints a share code for a friend
+  --join <code>        Join a hosted game as player 2 (no ROM needed)
+  --watch <code>       Watch a hosted game (spectator, sends no input)
+
+Frontend integration:
+  --control            Enable the IPC session channel (spawn with stdio 'ipc')
+  --input-map <json>   Controller remap: inline JSON or @file — per-device
+                       bindings keyed by SDL GUID, plus player port order
+
 Other:
   --no-gamepad         Disable gamepad input (keyboard only)
   -h, --help           Show help
@@ -206,7 +228,39 @@ retroemu --symbols ascii --fg-only ~/roms/my_game.nes     # ASCII on black backg
 # WASM carts (software rendering or GL-accelerated)
 retroemu my_cart.wasm                                # software cart in terminal
 retroemu --video sdl my_game.wasc                    # GL cart in SDL window
+
+# CRT look
+retroemu --video sdl --video-filter crt ~/roms/sonic.md
+
+# Cheats (the core decodes the format)
+retroemu --video sdl --cheats '[{"code":"SXIOPO","enabled":true}]' smb.nes
+
+# Remote play — P1 hosts, P2 joins with the printed code
+retroemu --video sdl --host-remote ~/roms/contra.nes
+retroemu --join ABC-DEF-GHJ                          # play as P2
+retroemu --watch ABC-DEF-GHJ                         # spectate
 ```
+
+### In-game overlay
+
+In SDL modes, **Start+Select** (held ~½ s) or **ESC** opens a menu drawn over
+the game: Resume · Save State · Load State · Screenshot · Fullscreen · Quit.
+Navigate with the d-pad/arrows and A/Enter. The core pauses while it's open.
+Holding Start+Select for ~2 s still force-quits.
+
+### Remote play
+
+`--host-remote` prints a share code like `4PA-UHX-RJJ`; a friend runs
+`retroemu --join <code>` and is player 2 within seconds — **they need no ROM
+and no core**, because your machine does the emulating. Video (changed rows,
+deflated), audio (12 kHz mono ADPCM, ~6 KB/s) and their controller (7 bytes at
+60 Hz) travel P2P over WebRTC; a signaling server sees ~3 KB and nothing more.
+The emulator itself never learns it's networked — a guest is just another
+controller on port 2.
+
+Share codes use a base24 alphabet with no ambiguous characters (no `0`/`O`,
+`1`/`I`/`L`, `2`/`Z`, `5`/`S`, `8`/`B`), so they survive being read aloud.
+Full protocol: `romdeck/docs/RemotePlay.md`.
 
 ## Rendering
 
@@ -453,6 +507,40 @@ host.reset();
 await host.shutdown();
 ```
 
+### Session control (what frontends use)
+
+`LibretroHost` also exposes the surface a frontend drives over `--control`:
+
+```javascript
+host.pause(); host.resume();
+host.setSpeed(4);                       // 0 = uncapped
+const blob = host.serializeState();     // Buffer, or null if unsupported
+host.unserializeState(blob);
+host.setCheats([{ code: 'SXIOPO', enabled: true }]);   // core decodes it
+
+// Memory — the same libretro surface cheats and achievements ride on
+host.memoryInfo();                      // regions this core actually exposes
+host.readMemory(2, 0x0000, 256);        // system RAM → Buffer
+host.writeMemory(2, 0x0010, [0xde, 0xad]);
+```
+
+`host.onFrameHook` fires after every executed frame (rewind uses it), and
+`AudioBridge.onPcm` taps the PCM going to the speakers (remote play uses it).
+
+### Remote play
+
+```javascript
+import { RemoteHost, RemoteGuest, formatCode } from 'retroemu/src/net/RemotePlay.js';
+
+const remote = new RemoteHost({ videoOutput, inputManager, audioBridge });
+const { code } = await remote.start();   // e.g. "4PA-UHX-RJJ"
+// …later
+await remote.stop();
+```
+
+The guest side is `RemoteGuest` (or just `retroemu --join <code>`), which
+needs no ROM and no core.
+
 ## Dependencies
 
 | Package | Purpose |
@@ -463,6 +551,8 @@ await host.shutdown();
 | [wasmcart](../wasmcart/) | WASM cart host — loads .wasm/.wasc carts, provides ABI (input, audio, assets, GL) |
 | [native-gles](../native-gles/) | OpenGL ES 3.0 Node.js addon — EGL pbuffer context + ~100 GL function bindings |
 | [webgl-node](../webgl-node/) | WebGL2 context for Node.js — provides canvas + WebGL2RenderingContext backed by native-gles |
+| [hsync](https://www.npmjs.com/package/hsync) | Remote play signaling — brokers the WebRTC handshake, then drops out of the loop |
+| [node-datachannel](https://github.com/murat-dogan/node-datachannel) | WebRTC data channels in Node (libdatachannel) — the P2P transport for remote play |
 
 ## Acknowledgments
 
