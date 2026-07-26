@@ -46,6 +46,10 @@ export class ControlChannel {
     };
   }
 
+  setOverlay(overlay) {
+    this.overlay = overlay;
+  }
+
   attachHost(host) {
     // Rewind snapshots ride the host's frame hook.
     host.onFrameHook = (frameCount) => {
@@ -91,7 +95,8 @@ export class ControlChannel {
   }
 
   _screenshotPng() {
-    const f = this._lastFrame;
+    // While the overlay menu is up, screenshot what the player actually sees.
+    const f = (this.overlay?.open && this.overlay.lastDrawn) || this._lastFrame;
     if (!f) return null;
     try {
       return rgbaToPng(f.rgba, f.width, f.height);
@@ -209,6 +214,17 @@ export class ControlChannel {
         const ok = h.unserializeState(entry.data);
         if (!ok) throw new Error('core rejected rewind state');
         return { frame: entry.frame, depth: this.rewind.depth };
+      }
+
+      case 'menu': {
+        if (!this.overlay) throw new Error('no overlay (terminal video mode)');
+        const op = params.op ?? 'toggle';
+        if (op === 'toggle') this.overlay.toggle();
+        else if (op === 'open') this.overlay.show();
+        else if (op === 'close') this.overlay.close();
+        else if (op === 'nav') this.overlay.key(params.action);
+        else throw new Error(`menu: unknown op ${op}`);
+        return { open: this.overlay.open, selected: this.overlay.selected };
       }
 
       case 'quit':

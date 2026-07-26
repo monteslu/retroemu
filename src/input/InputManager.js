@@ -56,8 +56,17 @@ export class InputManager {
     sdlWindow.on('keyDown', (e) => {
       const key = e.key?.toLowerCase();
 
-      // ESC to exit
-      if (key === 'escape') {
+      // Overlay menu (when a frontend/overlay registered a handler): the menu
+      // consumes nav keys while open, and ESC opens/closes it instead of
+      // hard-quitting. Without a handler, ESC quits (classic behavior).
+      if (this.onMenu) {
+        const overlayNav = { up: 'up', down: 'down', return: 'confirm', enter: 'confirm', z: 'confirm', x: 'back' };
+        if (this.menuKeyRouter && this.menuKeyRouter(overlayNav[key] ?? key)) return;
+        if (key === 'escape') {
+          this.onMenu();
+          return;
+        }
+      } else if (key === 'escape') {
         process.emit('SIGINT');
         return;
       }
@@ -110,15 +119,19 @@ export class InputManager {
 
       this.currentGamepads = gamepads;
 
-      // Check for Start+Select exit combo (buttons 8 and 9)
+      // Start+Select combo: with an overlay registered it opens the menu at
+      // ~0.5s (and a long 2s hold still hard-quits as a safety hatch);
+      // without one it quits at 0.5s (classic behavior).
       if (gamepads.length > 0) {
         const gp = gamepads[0];
         const startPressed = gp.buttons[9]?.pressed;
         const selectPressed = gp.buttons[8]?.pressed;
         if (startPressed && selectPressed) {
           this._exitComboHeld++;
-          // Exit after ~0.5 seconds (30 frames at 60fps)
-          if (this._exitComboHeld >= 30) {
+          if (this.onMenu) {
+            if (this._exitComboHeld === 30) this.onMenu();
+            if (this._exitComboHeld >= 120) process.emit('SIGINT');
+          } else if (this._exitComboHeld >= 30) {
             process.emit('SIGINT');
           }
         } else {

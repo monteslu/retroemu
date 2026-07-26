@@ -551,6 +551,22 @@ try {
     });
     await host.loadAndStart(romInfo.romPath, { saveDir, romData: romInfo.data });
     if (controlChannel) controlChannel.attachHost(host);
+
+    // In-game overlay menu (SDL modes only): Start+Select or ESC
+    if (videoMode === 'sdl' || videoMode === 'both') {
+      const { Overlay } = await import('../src/control/Overlay.js');
+      const overlay = new Overlay({
+        getHost: () => host,
+        videoOutput,
+        inputManager,
+        shutdown,
+        romPath: romInfo.romPath,
+        saveDir,
+      });
+      inputManager.onMenu = () => overlay.toggle();
+      inputManager.menuKeyRouter = (name) => overlay.key(name);
+      if (controlChannel) controlChannel.setOverlay(overlay);
+    }
   }
   if (controlChannel) controlChannel.sendReady();
 } catch (err) {
