@@ -26,23 +26,92 @@ const DEFAULT_FPS = 20;
 // into small chunks and reassembled by the guest.
 const CHUNK_CHARS = 8000;
 
+// ── share codes ──────────────────────────────────────────────────────
+//
+// network.md specifies a base24 alphabet with no visually ambiguous
+// characters (no 0/O, 1/I/L, 2/Z, 5/S, 8/B) so a code can be read aloud
+// without spelling it out. hsync's dynamic hostnames don't use that
+// alphabet — they're 8 characters of Crockford base32, which includes
+// 2, 5, 8, B and Z — and the hostname is assigned by the server, so we
+// can't ask for a nicer one.
+//
+// We don't need the server to change: 24^9 (2.64e12) > 32^8 (1.10e12), so
+// an 8-char hostname RECODES bijectively into 9 base24 characters. The
+// share code is a lossless re-encoding of the hostname, contains only
+// unambiguous characters, and decodes back exactly on the guest.
+const HOST_ALPHABET = '0123456789abcdefghjkmnpqrstvwxyz'; // Crockford base32
+const CODE_ALPHABET = '3467 9ACDEFGHJKMNPRTUVWXY'.replace(/\s/g, ''); // base24
+const HOST_LEN = 8;
+const CODE_LEN = 9;
+
+function encodeBase24(hostLabel) {
+  let n = 0n;
+  for (const ch of hostLabel) {
+    const d = HOST_ALPHABET.indexOf(ch);
+    if (d < 0) return null; // unexpected character — caller falls back
+    n = n * 32n + BigInt(d);
+  }
+  const out = [];
+  for (let i = 0; i < CODE_LEN; i++) {
+    out.unshift(CODE_ALPHABET[Number(n % 24n)]);
+    n /= 24n;
+  }
+  return out.join('');
+}
+
+function decodeBase24(code) {
+  let n = 0n;
+  for (const ch of code) {
+    const d = CODE_ALPHABET.indexOf(ch);
+    if (d < 0) return null;
+    n = n * 24n + BigInt(d);
+  }
+  const out = [];
+  for (let i = 0; i < HOST_LEN; i++) {
+    out.unshift(HOST_ALPHABET[Number(n % 32n)]);
+    n /= 32n;
+  }
+  return n === 0n ? out.join('') : null; // overflow ⇒ not a valid code
+}
+
+/** hsync hostname → the human-facing share code (XXX-XXX-XXX, base24). */
 export function formatCode(hostName) {
-  const raw = String(hostName ?? '').replace(/^https?:\/\//, '').split('.')[0].toUpperCase();
-  return raw.length === 8 ? `${raw.slice(0, 4)}-${raw.slice(4)}` : raw;
+  const label = String(hostName ?? '')
+    .replace(/^https?:\/\//, '').split('.')[0].toLowerCase();
+  if (label.length === HOST_LEN) {
+    const code = encodeBase24(label);
+    if (code) return `${code.slice(0, 3)}-${code.slice(3, 6)}-${code.slice(6)}`;
+  }
+  // Unknown shape: show it as-is rather than inventing something unjoinable.
+  return label.toUpperCase();
 }
 
 /**
  * Share code → the peer host string hsync wants.
- * hsync interpolates hostName straight into a fetch URL, so it must carry a
- * scheme or the peer RPC throws "Invalid URL".
+ *
+ * Accepts the base24 code, and still accepts a raw hostname or full URL so
+ * codes from older builds (or copied straight from hsync) keep working.
+ * hsync interpolates hostName into a fetch URL, so it must carry a scheme.
  */
 export function parseCode(code, domain = 'hsync.tech') {
-  const raw = String(code ?? '').trim().replace(/-/g, '').toLowerCase();
+  const raw = String(code ?? '').trim();
   if (!raw) throw new Error('empty share code');
-  if (/^https?:\/\//.test(raw)) return raw;
-  const host = raw.includes('.') ? raw : `${raw}.${domain}`;
-  return `https://${host}`;
+  if (/^https?:\/\//.test(raw)) return raw.toLowerCase();
+
+  const bare = raw.replace(/[-\s]/g, '');
+  if (bare.includes('.')) return `https://${bare.toLowerCase()}`;
+
+  if (bare.length === CODE_LEN) {
+    const host = decodeBase24(bare.toUpperCase());
+    if (host) return `https://${host}.${domain}`;
+    throw new Error(`"${raw}" isn't a valid share code`);
+  }
+  if (bare.length === HOST_LEN) return `https://${bare.toLowerCase()}.${domain}`;
+  throw new Error(`"${raw}" isn't a valid share code`);
 }
+
+/** The alphabet the UI should accept while typing. */
+export const CODE_CHARS = CODE_ALPHABET;
 
 /** Pack a W3C gamepad into the doc's 7-byte wire format. */
 export function packPad(pad) {

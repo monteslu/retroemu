@@ -620,6 +620,7 @@ try {
       remoteHost = new RemoteHost({ videoOutput, inputManager, audioBridge, log: (m) => console.log(m) });
       const info = await remoteHost.start();
       console.log(`\n  Share code: ${info.code}`);
+      console.log('  (base24 — no 0/O, 1/I/L, 2/Z, 5/S or 8/B, so it reads aloud cleanly)');
       console.log(`  Player 2:   npx retroemu --join ${info.code}`);
       console.log(`  Spectators: npx retroemu --watch ${info.code}\n`);
     }
