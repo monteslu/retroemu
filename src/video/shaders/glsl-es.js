@@ -156,7 +156,15 @@ function selectStage(src, stage) {
     if (/^#\s*else\b/.test(t) && stack.length) {
       const top = stack[stack.length - 1];
       if (top.stageCond) { emitting = top.prev && !emitting; continue; }
-      if (emitting || top.prev) out.push(line);
+      // A NON-stage #else must be passed through whenever its enclosing scope
+      // is live — and `emitting` is exactly that, because a non-stage #if
+      // never changed it. Testing `emitting || top.prev` emitted the directive
+      // even inside a cut stage branch, so BOTH halves of a
+      // `#if __VERSION__ >= 130 / #else` survived: `out vec4 FragColor;` AND
+      // `#define FragColor gl_FragColor`. The macro then renamed the declared
+      // output, every write went to a nonexistent gl_FragColor, and the
+      // program linked with ONE uniform and rendered black.
+      if (emitting) out.push(line);
       continue;
     }
     if (/^#\s*endif\b/.test(t) && stack.length) {
