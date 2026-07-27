@@ -352,6 +352,42 @@ export class ShaderChain {
     pass.setUniform2f('OrigInputSize', origW, origH);
     pass.setUniform2f('OriginalSize', origW, origH);
     pass.setUniform1i('Texture', 0);
+    // `s_p` is the Cg-derived spelling of the input sampler (12 shaders,
+    // including both crt-hyllian-multipass passes). Same texture unit.
+    pass.setUniform1i('s_p', 0);
+
+    // Extra samplers on their own texture units:
+    //   OrigTexture   the ORIGINAL emulator frame, not this pass's input
+    //   PassNTexture  the output of pass N (forward reference, unlike
+    //                 PassPrev which counts backwards from the current pass)
+    // Unbound, these sample texture unit 0 by default — i.e. silently the
+    // wrong image — or nothing at all, which is how c64-monitor, nnedi3 and
+    // artifact-colors rendered black.
+    let unit = 1;
+    const bindExtra = (name, tex, texW, texH) => {
+      // Sizes are bound even when the SAMPLER itself was optimised out: a
+      // shader may read Pass1TextureSize for geometry without ever sampling
+      // Pass1Texture, and crt-hyllian-pass1 does exactly that.
+      pass.setUniform2f(`${name}Size`, texW, texH);
+      pass.setUniform2f(`${name.replace(/Texture$/, '')}InputSize`, texW, texH);
+      if (!pass.uniforms.has(name) || !tex) return;
+      gl.glActiveTexture(GL_TEXTURE0 + unit);
+      gl.glBindTexture(GL_TEXTURE_2D, tex);
+      gl.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+      gl.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+      gl.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+      gl.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+      pass.setUniform1i(name, unit);
+      unit++;
+      gl.glActiveTexture(GL_TEXTURE0);
+    };
+    bindExtra('OrigTexture', this.sourceTex, origW, origH);
+    for (let k = 0; k < this.passes.length; k++) {
+      const earlier = this.passes[k];
+      if (k >= pass.spec.index) break;      // only PRECEDING passes exist yet
+      bindExtra(`Pass${k + 1}Texture`, earlier.tex, earlier.outW, earlier.outH);
+      if (earlier.spec.alias) bindExtra(earlier.spec.alias, earlier.tex, earlier.outW, earlier.outH);
+    }
 
     // frame_count_mod wraps the counter, for temporal effects like NTSC phase
     // alternation that only care about frame parity.

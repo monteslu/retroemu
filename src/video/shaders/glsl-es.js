@@ -222,8 +222,12 @@ export function toGlslEs300(source, stage) {
   // gl_FragColor is gone in ES 3.00. Files that already declare their own
   // output under __VERSION__ >= 130 must NOT get a second declaration — that
   // is a `FragColor redeclared` error, and an early probe hit it on every file.
-  const declaresOwnOutput = /\bout\s+(?:highp|mediump|lowp|COMPAT_PRECISION)?\s*vec4\s+\w+/.test(body)
-    || /#define\s+COMPAT_VARYING\s+out/.test(body);
+  // Does the shader declare its OWN fragment output? Only a real `out vec4`
+  // counts. An earlier version also accepted `#define COMPAT_VARYING out`,
+  // which is about VARYINGS, not the colour output — shaders that use it but
+  // write to gl_FragColor then got no output declared at all and failed with
+  // "`gl_FragColor' undeclared". 39 presets.
+  const declaresOwnOutput = /^\s*out\s+(?:highp|mediump|lowp|COMPAT_PRECISION\s+)?vec4\s+\w+/m.test(body);
 
   const header = [
     '#version 300 es',
@@ -231,19 +235,69 @@ export function toGlslEs300(source, stage) {
     'precision highp int;',
     `#define ${isVert ? 'VERTEX' : 'FRAGMENT'} 1`,
   ];
-  // Parameters are NOT injected as uniforms here, and that is measured, not
-  // assumed. Four variants against the 681-shader corpus:
+  // PARAMETER_UNIFORM must be DEFINED, and each `#pragma parameter` the shader
+  // does not declare itself must be declared here.
   //
-  //   define PARAMETER_UNIFORM + declare all params   30.4%  (416 redeclared)
-  //   define PARAMETER_UNIFORM + declare missing only 80.5%
-  //   declare missing only, macro undefined           80.9%
-  //   inject nothing                                  81.6%  <- this
+  // This was originally decided by shader COMPILE rate, which picked the wrong
+  // answer. Compile rate says "inject nothing" wins by 0.7 points:
   //
-  // With the macro undefined, the corpus's own `#ifndef PARAMETER_UNIFORM`
-  // branch supplies constant defaults, which is what a preset with no
-  // parameter overrides wants anyway. Binding real parameter VALUES needs the
-  // runner to know which uniforms a linked program actually has, so it is done
-  // there (per pass, by reflection) rather than by rewriting source.
+  //   define + declare all params      30.4%   (416 redeclared)
+  //   define + declare missing only    80.5%
+  //   declare missing, macro undefined 80.9%
+  //   inject nothing                   81.6%
+  //
+  // But a shader that COMPILES is not a shader that RENDERS. With the macro
+  // undefined the corpus falls into its `#else` branch, whose values are
+  // placeholders, not defaults — ntsc-simple-2 sets `#define steps 0.1`, so
+  // `int N = int(steps)` is 0, `for (i=-N; i<N; i++)` never runs, the only
+  // texture read is dead code, the driver eliminates the sampler, and the pass
+  // outputs a constant. It compiles perfectly and renders black. RetroArch
+  // defines PARAMETER_UNIFORM, which is why the same preset works there.
+  //
+  // Declaring only what the shader does not declare itself avoids the 416
+  // redeclaration errors that made the naive version score 30%.
+  const params = parseParameters(source);
+  if (params.length) {
+    const selfDeclared = new Set();
+    // Any qualifier, not just COMPAT_PRECISION — shaders spell it PRECISION,
+    // COMPAT_PRECISION, highp/mediump/lowp, or nothing. Missing one means we
+    // declare a uniform the shader already has ("`SHARPNESS' redeclared").
+    const declRe = /\buniform\s+(?:\w+\s+)?float\s+(\w+)/g;
+    let dm;
+    while ((dm = declRe.exec(body)) !== null) selfDeclared.add(dm[1]);
+    const missing = params.filter((x) => !selfDeclared.has(x.name));
+    // Match the precision the shader ITSELF uses for its uniforms. Guessing
+    // wrong either way is a cross-stage link error ("declared as type float
+    // and type float16_t"): COMPAT_PRECISION is mediump in most ES builds but
+    // some shaders spell out highp. Read it off the file.
+    // Precision must match what the SHADER uses for the SAME uniform in its
+    // other stage, or the program fails to link ("declared as type float16_t
+    // and type float"). Two traps:
+    //   - a shader often declares its parameter uniforms in only ONE stage, so
+    //     a per-stage guess differs between vertex and fragment
+    //   - an UNQUALIFIED `uniform float X` is highp, not mediump
+    // So: look at the whole source, and prefer the qualifier actually used on
+    // a parameter declaration; unqualified wins because it is the strictest.
+    const src = String(source);
+    const unqualified = /^\s*uniform\s+float\s+\w+/m.test(src);
+    const precM = /uniform\s+(highp|mediump|lowp)\s+float\s+\w+/.exec(src)
+      ?? /#define\s+COMPAT_PRECISION\s+(highp|mediump|lowp)/.exec(src);
+    const prec = unqualified ? 'highp' : (precM ? precM[1] : 'mediump');
+    header.push('#define PARAMETER_UNIFORM 1');
+    // mediump, matching what the corpus's own `uniform COMPAT_PRECISION float
+    // NAME` resolves to in an ES build. Declaring the same name as highp
+    // `float` is a cross-stage precision mismatch ("declared as type float and
+    // type float16_t") that fails the LINK on ~100 shaders. COMPAT_PRECISION
+    // itself cannot be used here — the shader defines it further down, after
+    // this header.
+    for (const x of missing) header.push(`uniform ${prec} float ${x.name};`);
+  }
+  // gl_FragColor does not exist in ES 3.00. A shader that declares no output
+  // of its own (GLSL-120-era files that only `#define FragColor gl_FragColor`)
+  // needs one supplied, or it fails with "`gl_FragColor' undeclared".
+  if (!isVert && !declaresOwnOutput) {
+    header.push('out vec4 _retroemuFragColor;', '#define gl_FragColor _retroemuFragColor');
+  }
   return `${header.join('\n')}\n${body}`;
 }
 
@@ -263,7 +317,16 @@ export function stagesFor(source) {
  */
 export function parseParameters(source) {
   const out = [];
-  const re = /^\s*#pragma\s+parameter\s+(\w+)\s+"([^"]*)"\s+([\d.eE+-]+)\s+([\d.eE+-]+)\s+([\d.eE+-]+)(?:\s+([\d.eE+-]+))?/gm;
+  // COMMENTED-OUT pragmas count too.
+  //
+  // artifact-colors1 has `//#pragma parameter FIR_SIZE "FIR Size" 29.0 ...`
+  // while still declaring `uniform float FIR_SIZE` inside its
+  // `#ifdef PARAMETER_UNIFORM` block. Skipping the commented line left the
+  // uniform unbound at 0, so `for (i = 0; i < int(FIR_SIZE); i++)` never ran,
+  // the texture read inside it was dead, and the pass rendered black. The
+  // commented pragma still carries the right default (29.0), which is exactly
+  // the value the shader needs.
+  const re = /^\s*(?:\/\/)?\s*#pragma\s+parameter\s+(\w+)\s+"([^"]*)"\s+([\d.eE+-]+)\s+([\d.eE+-]+)\s+([\d.eE+-]+)(?:\s+([\d.eE+-]+))?/gm;
   let m;
   while ((m = re.exec(String(source))) !== null) {
     out.push({

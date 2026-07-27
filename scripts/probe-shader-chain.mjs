@@ -221,5 +221,40 @@ let failures = 0;
   chain.destroy();
 }
 
+// ── the six presets RetroArch renders and we did not ───────────────
+// Each was black for a different reason; all six are covered here because
+// each fix is independently regressable.
+{
+  const detail = new Uint8Array(W * H * 4);
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const i = (y * W + x) * 4;
+      detail[i] = (x * 7 + y * 3) & 255;
+      detail[i + 1] = ((x * x / 64) + y) & 255;
+      detail[i + 2] = ((x ^ y) * 3) & 255;
+      detail[i + 3] = 255;
+    }
+  }
+  for (const name of [
+    'crt/crt-hyllian-multipass',       // s_p sampler + PassNTextureSize
+    'nnedi3/nnedi3-nns16-2x-luma',     // PassNTexture binding
+    'nnedi3/nnedi3-nns16-4x-luma',
+    'ntsc/artifact-colors',            // commented-out #pragma parameter
+    'ntsc/ntsc-simple',                // PARAMETER_UNIFORM must be defined
+    'presets/c64-monitor',
+    'presets/c64-monitor-fast',
+  ]) {
+    let colours = 0; let err = '';
+    try {
+      const chain = new ShaderChain(loadPreset(path.join(CORPUS, `${name}.glslp`)));
+      chain.render(detail, W, H, viewport);
+      chain.render(detail, W, H, viewport);
+      colours = readback().colours;
+      chain.destroy();
+    } catch (e) { err = e.message.slice(0, 50); }
+    if (!say(`renders: ${name}`, colours > 2, err || `${colours} colours`)) failures++;
+  }
+}
+
 console.log(`\n${failures ? `${failures} FAILURES` : 'CHAIN OK'}`);
 process.exit(failures ? 1 : 0);
