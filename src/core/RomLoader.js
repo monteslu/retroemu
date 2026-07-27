@@ -1,5 +1,6 @@
 import fs from 'fs/promises';
 import path from 'path';
+import zlib from 'zlib';
 import yauzl from 'yauzl';
 import { getSupportedExtensions } from './SystemDetector.js';
 
@@ -50,8 +51,16 @@ async function extractRomFromZip(zipPath) {
       }
 
       let foundRom = null;
+      // Settle EXACTLY once, and never on the 'close' event alone: with
+      // lazyEntries, calling close() from inside an entry's read stream does
+      // not reliably emit 'close', so waiting for it hung the whole load. The
+      // symptom was not an error — node exited 13 with "unsettled top-level
+      // await" and the session simply never became ready.
+      let settled = false;
+      const ok = (v) => { if (!settled) { settled = true; resolve(v); } };
+      const bad = (e) => { if (!settled) { settled = true; reject(e); } };
 
-      zipfile.on('error', reject);
+      zipfile.on('error', bad);
 
       zipfile.on('entry', (entry) => {
         const entryExt = path.extname(entry.fileName).toLowerCase();
@@ -62,17 +71,38 @@ async function extractRomFromZip(zipPath) {
           return;
         }
 
-        // Found a ROM - extract it
-        zipfile.openReadStream(entry, (err, readStream) => {
+        // Found a ROM - extract it.
+        //
+        // Read the entry RAW and inflate it ourselves. yauzl 3.2.0's internal
+        // inflate pipeline stalls part-way through on Node 24 (measured:
+        // 320641 of 393232 bytes, then no further 'data' and no 'end'), which
+        // is what made every ROM above ~80 KB hang forever. The raw read is
+        // unaffected -- all compressed bytes arrive -- and zlib inflates them
+        // correctly, so we take the bytes from yauzl and do the decompression.
+        zipfile.openReadStream(entry, { decompress: false }, (err, readStream) => {
           if (err) {
-            reject(err);
+            bad(err);
             return;
           }
 
           const chunks = [];
           readStream.on('data', (chunk) => chunks.push(chunk));
           readStream.on('end', () => {
-            const data = Buffer.concat(chunks);
+            const raw = Buffer.concat(chunks);
+            // method 0 = stored, 8 = deflate. Anything else is not something
+            // this archive format lets us handle without another dependency.
+            let data;
+            try {
+              if (entry.compressionMethod === 0) data = raw;
+              else if (entry.compressionMethod === 8) data = zlib.inflateRawSync(raw);
+              else {
+                bad(new Error(`Unsupported ZIP compression method ${entry.compressionMethod} for ${entry.fileName}`));
+                return;
+              }
+            } catch (e) {
+              bad(new Error(`Failed to decompress ${entry.fileName}: ${e.message}`));
+              return;
+            }
             let fileName = entry.fileName;
 
             // .bin is ambiguous — check magic bytes for N64 ROM signatures
@@ -92,18 +122,24 @@ async function extractRomFromZip(zipPath) {
               originalPath: zipPath,
               zipEntry: entry.fileName,
             };
-            zipfile.close();
+            // Resolve on the data we actually have rather than waiting for a
+            // 'close' that may never arrive; close() is now just cleanup.
+            try { zipfile.close(); } catch { /* already closing */ }
+            ok(foundRom);
           });
-          readStream.on('error', reject);
+          readStream.on('error', bad);
         });
       });
 
+      // Only reachable when every entry was skipped, i.e. nothing playable
+      // was in the archive.
+      zipfile.on('end', () => {
+        bad(new Error(`No supported ROM file found in ZIP. Supported: ${[...supportedExtensions].join(', ')}`));
+      });
+
       zipfile.on('close', () => {
-        if (foundRom) {
-          resolve(foundRom);
-        } else {
-          reject(new Error(`No supported ROM file found in ZIP. Supported: ${[...supportedExtensions].join(', ')}`));
-        }
+        if (foundRom) ok(foundRom);
+        else bad(new Error(`No supported ROM file found in ZIP. Supported: ${[...supportedExtensions].join(', ')}`));
       });
 
       zipfile.readEntry();
