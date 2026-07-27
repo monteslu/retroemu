@@ -58,12 +58,12 @@ function compile(type, src) {
   return { ok: true, s };
 }
 
+const { stagesFor } = await import('../src/video/shaders/glsl-es.js');
 const SHADER = `${CORPUS}/crt/shaders/crt-geom-mini.glsl`;
-const body = readFileSync(SHADER, 'utf8').replace(/^\s*#version.*$/gm, '');
-const head = (st) => `#version 300 es\nprecision highp float;\nprecision highp int;\n#define ${st} 1\n`;
+const st0 = stagesFor(readFileSync(SHADER, 'utf8'));
 
-const v = compile(GL_VERTEX_SHADER, head('VERTEX') + body);
-const f = compile(GL_FRAGMENT_SHADER, head('FRAGMENT') + body);
+const v = compile(GL_VERTEX_SHADER, st0.vertex);
+const f = compile(GL_FRAGMENT_SHADER, st0.fragment);
 say('Q2 real RetroArch shader compiles (crt-geom-mini)', v.ok && f.ok,
   v.ok && f.ok ? 'both stages' : `${v.ok ? '' : 'V:' + v.log} ${f.ok ? '' : 'F:' + f.log}`);
 if (!v.ok || !f.ok) process.exit(1);
