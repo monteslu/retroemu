@@ -748,7 +748,15 @@ export class LibretroHost {
         }
 
         if (this.onFrameHook) {
-          try { this.onFrameHook(this._frameCount); } catch { /* hook errors never kill the loop */ }
+          try { this.onFrameHook(this._frameCount); } catch (err) {
+            // Never kill the loop — but never swallow it silently either. A
+            // hook that throws every frame used to vanish completely, which
+            // cost real time chasing "the feature just does nothing".
+            if (!this._hookErrorLogged) {
+              this._hookErrorLogged = true;
+              console.error(`frame hook threw (further errors suppressed): ${err?.stack ?? err}`);
+            }
+          }
         }
       }
 

@@ -17,3 +17,8 @@ Thumbs.db
 *.swo
 .vscode/
 .idea/
+
+# Built WASM artifacts — large, generated. Rebuild with scripts/build-*.sh.
+# NOT committed, but DOES ship: package.json "files" includes src/, and npm
+# ignores .gitignore when a files field is present. Build before publishing.
+src/cheevos/wasm/

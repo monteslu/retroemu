@@ -13,6 +13,7 @@
 // stateSupported: false.
 import { rgbaToPng } from './png.js';
 import { RewindBuffer } from './RewindBuffer.js';
+import { evaluatorAvailable as evaluatorBuilt } from '../cheevos/rcheevos.js';
 
 const REWIND_INTERVAL_FRAMES = 30; // one snapshot every half second at 60fps
 
@@ -68,6 +69,9 @@ export class ControlChannel {
       cheats: !!host,
       memory: !!host,
       coreOptions: !!host,
+      // Achievements need BOTH a libretro host (for memory) and the evaluator
+      // artifact, which is optional and may not have been built.
+      achievements: !!host && evaluatorBuilt(),
       // Presentation is owned by the player process either way.
       screenshot: true,
       fullscreen: true,
@@ -81,14 +85,53 @@ export class ControlChannel {
   }
 
   attachHost(host) {
-    // Rewind snapshots ride the host's frame hook.
+    this.host = host;
+    // Rewind snapshots AND achievement evaluation ride the host's frame hook.
+    // Note the ordering: cheevos must run even when rewind is disabled, so the
+    // rewind early-returns are scoped to their own block rather than the whole
+    // hook — they used to `return` out of it entirely.
     host.onFrameHook = (frameCount) => {
-      if (!this.rewindEnabled) return;
-      if (frameCount % REWIND_INTERVAL_FRAMES !== 0) return;
-      if (host.paused || host.speed !== 1) return; // don't snapshot ff/paused
-      const data = host.serializeState();
-      if (data) this.rewind.push(data, frameCount);
+      if (this.rewindEnabled
+        && frameCount % REWIND_INTERVAL_FRAMES === 0
+        && !host.paused && host.speed === 1) {
+        const data = host.serializeState();
+        if (data) this.rewind.push(data, frameCount);
+      }
+      if (this.cheevos) this._cheevosFrame(host);
     };
+  }
+
+  /**
+   * One achievement evaluation tick.
+   *
+   * rcheevos peeks MANY addresses per frame — once per distinct memory
+   * reference across the whole active set — so each peek must be a buffer
+   * read, never an IPC round trip or a fresh slice of the core heap. System
+   * RAM is snapshotted ONCE here and every peek is served from that snapshot.
+   *
+   * Paused and fast-forwarded frames are skipped: evaluating a paused game
+   * wastes work, and RA's own rule is that fast-forward invalidates a session.
+   */
+  _cheevosFrame(host) {
+    if (host.paused || host.speed !== 1) return;
+    const ram = host.readMemory(this.cheevosRegion, 0, this.cheevosSize);
+    if (!ram) return;
+    const unlocked = this.cheevos.frame((addr, num) => {
+      let v = 0;
+      for (let i = 0; i < num; i++) v |= (ram[addr + i] ?? 0) << (8 * i);
+      return v >>> 0;
+    });
+    for (const a of unlocked) {
+      // The frontend owns awarding: it has the credentials and the API client.
+      // This process only reports what the evaluator saw.
+      //
+      // `achievementId`, NOT `id`: the RPC envelope on this channel is
+      // { id, result } | { id, error }, so ANY message carrying `id` is taken
+      // for a response and dropped before the event handlers ever see it. An
+      // achievement event with `id` unlocked correctly and then vanished
+      // silently on the wire.
+      this._send({ event: 'achievement', achievementId: a.id, title: a.title });
+    }
   }
 
   sendReady() {
@@ -253,6 +296,45 @@ export class ControlChannel {
         const ok = h.unserializeState(entry.data);
         if (!ok) throw new Error('core rejected rewind state');
         return { frame: entry.frame, depth: this.rewind.depth };
+      }
+
+      // ── achievements ─────────────────────────────────────────────
+      // The frontend fetches the definitions (it owns the RA credentials) and
+      // hands them here; this process evaluates them against core memory and
+      // emits an 'achievement' event when one triggers. Awarding stays with
+      // the frontend, so the player process never needs an API key.
+      case 'cheevosActivate': {
+        const h = needHost();
+        const { AchievementRuntime, evaluatorAvailable } = await import('../cheevos/rcheevos.js');
+        if (!evaluatorAvailable()) {
+          throw new Error('achievement evaluator not built — run scripts/build-rcheevos.sh in retroemu');
+        }
+        if (!this.cheevos) this.cheevos = await AchievementRuntime.create();
+
+        // Evaluate against system RAM. Snapshot size comes from the core so a
+        // peek can never run off the end of the region.
+        const region = params.region ?? 2;
+        const info = h.memoryInfo().find((r) => r.id === region);
+        if (!info) throw new Error(`core exposes no memory region ${region}`);
+        this.cheevosRegion = region;
+        this.cheevosSize = info.size;
+
+        const res = this.cheevos.activate(params.achievements ?? []);
+        return { ...res, ...this.cheevos.status(), region, regionSize: info.size };
+      }
+
+      case 'cheevosStatus':
+        return this.cheevos ? this.cheevos.status() : { active: 0, triggered: 0, primed: [] };
+
+      case 'cheevosReset':
+        // A loaded save state makes prior evaluation state meaningless.
+        this.cheevos?.reset();
+        return { ok: true };
+
+      case 'cheevosStop': {
+        this.cheevos?.dispose();
+        this.cheevos = null;
+        return { ok: true };
       }
 
       case 'remoteHost': {
