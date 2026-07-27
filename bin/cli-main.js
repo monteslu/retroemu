@@ -47,6 +47,7 @@ let uncapped = false;
 let controlMode = false; // --control: IPC session channel for frontends (romdeck)
 let inputRemap = null;   // --input-map: per-device bindings + player order
 let videoFilter = 'none'; // --video-filter: none | sharp | scanlines | crt
+let shaderPreset = null;  // --shader: path to a .glslp preset (GPU, SDL modes)
 let joinCode = null;      // --join/--watch: remote play guest
 let watchOnly = false;
 let hostRemote = false;   // --host-remote: start hosting immediately
@@ -99,6 +100,8 @@ for (let i = 0; i < args.length; i++) {
     hostRemote = true;
   } else if (args[i] === '--video-filter' && args[i + 1]) {
     videoFilter = args[++i];
+  } else if (args[i] === '--shader' && args[i + 1]) {
+    shaderPreset = resolve(args[++i]);
   } else if (args[i] === '--ff-speed' && args[i + 1]) {
     // 0 = uncapped; anything else is clamped to the host's accepted range
     const v = Number(args[++i]);
@@ -296,7 +299,7 @@ if (isCart) {
 // Window surface GL carts: scale=1 since EGL surface matches native window pixels (not SDL scaled)
 const hwLibretroCores = ['mupen64plus_next', 'parallel_n64'];
 const needsGL = cartUsesGL || (system && hwLibretroCores.includes(system.core));
-const videoOutput = new VideoOutput({ video: videoMode, scale: glUseWindowSurface ? 1 : sdlScale, accelerated: !needsGL || glUseWindowSurface, initWidth: preferredWidth, initHeight: preferredHeight, fullscreen, opengl: glUseWindowSurface });
+const videoOutput = new VideoOutput({ video: videoMode, scale: glUseWindowSurface ? 1 : sdlScale, accelerated: !needsGL || glUseWindowSurface, initWidth: preferredWidth, initHeight: preferredHeight, fullscreen, opengl: glUseWindowSurface, shader: shaderPreset });
 await videoOutput.init();
 
 // For SDL-only GL carts, create EGL context using the SDL window's native handle
@@ -447,6 +450,12 @@ if (glUseWindowSurface) {
 
   gl.glViewport(0, 0, glFBOW, glFBOH);
   } // end if (!glNoFBORedirect)
+}
+// Shaders and CPU filters are separate subsystems and RetroArch does not
+// combine them either. Say so rather than silently dropping one.
+if (shaderPreset && videoFilter && videoFilter !== 'none') {
+  console.error(`[shader] --shader overrides --video-filter ${videoFilter} (GPU shader vs CPU filter)`);
+  videoFilter = 'none';
 }
 videoOutput.setFilter(videoFilter);
 videoOutput.setFrameSkip(frameSkip);
@@ -1118,6 +1127,9 @@ function printUsage() {
   console.log(`  --uncapped           Run as fast as the host allows (no 60 FPS cap)`);
   console.log(`  --control            Enable the IPC session channel (for frontends; spawn with stdio 'ipc')`);
   console.log(`  --input-map <json>   Controller remap: inline JSON or @file (per-device bindings + port order)`);
+  console.log(`  --shader <preset>    RetroArch .glslp shader preset on the GPU (SDL modes).
+                       Multi-pass; overrides --video-filter, which is the
+                       separate CPU post-process family.`);
   console.log(`  --video-filter <f>   CRT post-process: none, sharp, scanlines, crt (SDL modes)
   --ff-speed <n>       Fast-forward multiplier, 0=uncapped (default: 4)
   --no-rewind          Disable rewind history (saves memory + per-frame work)`);

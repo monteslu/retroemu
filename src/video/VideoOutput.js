@@ -39,6 +39,12 @@ export class VideoOutput {
     this.fullscreen = !!options.fullscreen;
     this.opengl = !!options.opengl;
 
+    // --shader <preset.glslp>: GPU shader chain. Mutually exclusive with the
+    // CPU --video-filter, the same way RetroArch treats them (they are
+    // different subsystems; see internal-romdeck/SHADERS.md §1).
+    this.shaderPreset = options.shader || null;
+    this.glRenderer = null;
+
     // Callback for frame capture (future vibe-eyes integration)
     this.onFrameCallback = options.onFrame || null;
 
@@ -72,7 +78,56 @@ export class VideoOutput {
         opengl: this.opengl,
       });
       this.sdlRenderer.init(this.initWidth || 256, this.initHeight || 224);
+
+      // GL presentation rides on the SDL window. If the context or the preset
+      // fails, say so and keep the CPU blit — a bad shader must not cost the
+      // user their game.
+      if (this.shaderPreset) {
+        const { GLRenderer } = await import('./GLRenderer.js');
+        try {
+          this.glRenderer = await GLRenderer.create({
+            window: this.sdlRenderer.getWindow(),
+            presetPath: this.shaderPreset,
+          });
+          if (!this.glRenderer) {
+            console.error('[shader] no GL context available — falling back to the CPU path');
+          } else {
+            const st = this.glRenderer.status();
+            console.error(`[shader] ${this.shaderPreset} — ${st.passes} pass(es)`);
+            for (const w of st.warnings) console.error(`[shader] ${w}`);
+          }
+        } catch (err) {
+          console.error(`[shader] ${err.message}`);
+          console.error('[shader] falling back to the CPU path');
+          this.glRenderer = null;
+        }
+      }
     }
+  }
+
+  /**
+   * Get one frame to the screen.
+   *
+   * The GPU shader chain and the CPU filter are alternatives, not a pipeline:
+   * a preset already ends in its own final pass, and running a CPU scanline
+   * filter over its output would be a second, conflicting effect.
+   *
+   * Either way this runs AFTER the frame has been handed to
+   * onFrameCallback — screenshots, remote play and the overlay read that
+   * buffer, and presentation must never be the thing that produces it.
+   */
+  _present(rgbaData, width, height) {
+    if (this.glRenderer) {
+      this.glRenderer.render(rgbaData, width, height);
+      return;
+    }
+    if (this.filter && this.filter !== 'none') {
+      const f = applyFilter(rgbaData, width, height, this.filter, this._filterBuf);
+      this._filterBuf = f.pixels;
+      this.sdlRenderer.render(f.pixels, f.width, f.height);
+      return;
+    }
+    this.sdlRenderer.render(rgbaData, width, height);
   }
 
   async _initTerminalWorker() {
@@ -183,13 +238,7 @@ export class VideoOutput {
     // upscales 2x on its way to the texture; the terminal path and the frame
     // callback keep the unfiltered image (screenshots stay native-res).
     if (useSDL && this.sdlRenderer) {
-      if (this.filter && this.filter !== 'none') {
-        const f = applyFilter(rgbaData, width, height, this.filter, this._filterBuf);
-        this._filterBuf = f.pixels;
-        this.sdlRenderer.render(f.pixels, f.width, f.height);
-      } else {
-        this.sdlRenderer.render(rgbaData, width, height);
-      }
+      this._present(rgbaData, width, height);
     }
 
     // Frame callback for external consumers (future vibe-eyes integration)
@@ -258,7 +307,8 @@ export class VideoOutput {
     if (!useSDL && (skipTerminalFrame || terminalBusy)) return;
 
     if (useSDL && this.sdlRenderer) {
-      this.sdlRenderer.renderRaw(rgbaBuffer, width, height, 'rgba32');
+      if (this.glRenderer) this.glRenderer.render(rgbaBuffer, width, height);
+      else this.sdlRenderer.renderRaw(rgbaBuffer, width, height, 'rgba32');
     }
 
     if (this.onFrameCallback) {
@@ -318,8 +368,10 @@ export class VideoOutput {
 
     if (!useSDL && (skipTerminalFrame || terminalBusy)) return;
 
-    // SDL can render XRGB8888 directly as 'bgrx8888' — no pixel conversion needed
-    if (useSDL && this.sdlRenderer && !useTerminal) {
+    // SDL can render XRGB8888 directly as 'bgrx8888' — no pixel conversion
+    // needed. The shader chain cannot take that shortcut: it uploads RGBA, so
+    // when a shader is active we fall through to the conversion below.
+    if (useSDL && this.sdlRenderer && !useTerminal && !this.glRenderer) {
       this.sdlRenderer.renderRaw(xrgbBuffer, width, height, 'argb8888');
       if (this.onFrameCallback) {
         this.onFrameCallback(xrgbBuffer, width, height);
@@ -341,7 +393,7 @@ export class VideoOutput {
     }
 
     if (useSDL && this.sdlRenderer) {
-      this.sdlRenderer.render(rgbaData, width, height);
+      this._present(rgbaData, width, height);
     }
 
     if (this.onFrameCallback) {
@@ -476,6 +528,8 @@ export class VideoOutput {
     this.workerReady = false;
 
     if (this.sdlRenderer) {
+      this.glRenderer?.destroy();
+      this.glRenderer = null;
       this.sdlRenderer.destroy();
       this.sdlRenderer = null;
     }
