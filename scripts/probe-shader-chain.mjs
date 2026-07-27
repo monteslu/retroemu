@@ -184,5 +184,42 @@ let failures = 0;
   chain.destroy();
 }
 
+// ── regressions for two silent-black bugs ──────────────────────────
+// Both rendered a perfectly black frame with no GL error and no failed
+// assertion anywhere else.
+{
+  // 1. FrameCount is declared `int` by 1283 corpus shaders. Binding an int
+  //    uniform with glUniform1f is silently ignored, so it stayed 0 forever
+  //    and misc/flicker (frame * mod(FrameCount, 2.0)) was always black.
+  const detail = new Uint8Array(W * H * 4);
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const i = (y * W + x) * 4;
+      detail[i] = (x * 7 + y * 3) & 255;
+      detail[i + 1] = ((x * x / 64) + y) & 255;
+      detail[i + 2] = ((x ^ y) * 3) & 255;
+      detail[i + 3] = 255;
+    }
+  }
+  const chain = new ShaderChain(loadPreset(path.join(CORPUS, 'misc/flicker.glslp')));
+  chain.render(detail, W, H, viewport);
+  const f0 = readback();
+  chain.render(detail, W, H, viewport);
+  const f1 = readback();
+  // Frame 0 IS legitimately black here (mod(0,2) == 0); frame 1 must not be.
+  if (!say('int-typed FrameCount reaches the shader', f1.colours > 100,
+    `frame0 ${f0.colours} colours -> frame1 ${f1.colours}`)) failures++;
+  chain.destroy();
+}
+{
+  // 2. OrigInputSize was never bound, so handheld/dot.glsl multiplied every
+  //    texture coordinate by zero. 22 shaders read it.
+  const chain = new ShaderChain(loadPreset(path.join(CORPUS, 'handheld/dot.glslp')));
+  chain.render(frame, W, H, viewport);
+  const r = readback();
+  if (!say('OrigInputSize is bound', r.colours > 8, `${r.colours} colours`)) failures++;
+  chain.destroy();
+}
+
 console.log(`\n${failures ? `${failures} FAILURES` : 'CHAIN OK'}`);
 process.exit(failures ? 1 : 0);

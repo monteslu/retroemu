@@ -24,6 +24,8 @@ const GL_FRAGMENT_SHADER = 0x8B30;
 const GL_COMPILE_STATUS = 0x8B81;
 const GL_LINK_STATUS = 0x8B82;
 const GL_ACTIVE_UNIFORMS = 0x8B86;
+const GL_INT = 0x1404;
+const GL_BOOL = 0x8B56;
 const GL_ARRAY_BUFFER = 0x8892;
 const GL_STATIC_DRAW = 0x88E4;
 const GL_FLOAT = 0x1406;
@@ -102,13 +104,17 @@ class Pass {
     // preset override for a parameter the shader dropped is a no-op instead
     // of a compile error.
     this.uniforms = new Map();
+    this.uniformTypes = new Map();
     const count = gl.glGetProgramiv(prog, GL_ACTIVE_UNIFORMS) || 0;
     for (let i = 0; i < count; i++) {
       const info = gl.glGetActiveUniform(prog, i);
       if (!info?.name) continue;
       const name = info.name.replace(/\[\d+\]$/, '');
       const loc = gl.glGetUniformLocation(prog, name);
-      if (loc >= 0) this.uniforms.set(name, loc);
+      if (loc >= 0) {
+        this.uniforms.set(name, loc);
+        this.uniformTypes.set(name, info.type);
+      }
     }
 
     // PassPrev*/PassFeedback* sample an EARLIER pass or the PREVIOUS frame.
@@ -154,6 +160,15 @@ class Pass {
     if (l !== undefined) gl.glUniform1i(l, v);
   }
 
+  /** Bind a scalar using whichever of int/float the shader declared. */
+  setUniformNumber(name, v) {
+    const l = this.uniforms.get(name);
+    if (l === undefined) return;
+    const t = this.uniformTypes.get(name);
+    if (t === GL_INT || t === GL_BOOL) gl.glUniform1i(l, Math.round(v));
+    else gl.glUniform1f(l, v);
+  }
+
   destroy() {
     if (this.fbo) gl.glDeleteFramebuffers(1, new Uint32Array([this.fbo]));
     if (this.tex) gl.glDeleteTextures(1, new Uint32Array([this.tex]));
@@ -197,17 +212,26 @@ export class ShaderChain {
   }
 
   _initGeometry() {
-    // A full-screen quad. V is flipped because core framebuffers are top-down
-    // and GL textures are bottom-up.
+    // A full-screen quad, as FULL vec4s.
+    //
+    // The corpus declares `attribute vec4 VertexCoord` and `vec4 TexCoord` —
+    // reflection confirms both link as vec4 (0x8B52). Supplying only 2 floats
+    // leaves z=0,w=1 by GL default, and a shader that writes
+    // `gl_Position = MVPMatrix * VertexCoord` then multiplies by a vector with
+    // no w contribution from the buffer. Shaders that spell the multiply out
+    // component-wise (crt-geom-mini) happened to survive; ones that use the
+    // matrix form (dot, ntsc, mdapt, ...) rendered pure black. 19 presets.
+    //
+    // Layout per vertex: pos.xyzw, uv.xyzw  = 8 floats, 32 bytes.
     const buf = new Uint32Array(1);
     gl.glGenBuffers(1, buf);
     this.vbo = buf[0];
     gl.glBindBuffer(GL_ARRAY_BUFFER, this.vbo);
     gl.glBufferData(GL_ARRAY_BUFFER, new Float32Array([
-      -1, -1, 0, 1,
-      1, -1, 1, 1,
-      -1, 1, 0, 0,
-      1, 1, 1, 0,
+      -1, -1, 0, 1, 0, 1, 0, 1,
+      1, -1, 0, 1, 1, 1, 0, 1,
+      -1, 1, 0, 1, 0, 0, 0, 1,
+      1, 1, 0, 1, 1, 0, 0, 1,
     ]), GL_STATIC_DRAW);
 
     // The source texture: the emulator frame, uploaded once per frame and
@@ -301,10 +325,17 @@ export class ShaderChain {
     gl.glUseProgram(pass.program);
     gl.glBindBuffer(GL_ARRAY_BUFFER, this.vbo);
 
-    for (const [loc, offset] of [[pass.attribs.vertex, 0], [pass.attribs.texCoord, 8]]) {
+    for (const [loc, offset] of [[pass.attribs.vertex, 0], [pass.attribs.texCoord, 16]]) {
       if (loc < 0) continue;
       gl.glEnableVertexAttribArray(loc);
-      gl.glVertexAttribPointer(loc, 2, GL_FLOAT, false, 16, offset);
+      gl.glVertexAttribPointer(loc, 4, GL_FLOAT, false, 32, offset);
+    }
+    // COLOR is declared vec4 by most of the corpus and is usually multiplied
+    // into the output. Unbound it defaults to (0,0,0,1) — transparent black —
+    // which silently zeroes the whole frame. Bind it to white.
+    if (pass.attribs.color >= 0) {
+      gl.glDisableVertexAttribArray(pass.attribs.color);
+      gl.glVertexAttrib4f?.(pass.attribs.color, 1, 1, 1, 1);
     }
 
     // The libretro uniform contract. TextureSize is the INPUT texture's real
@@ -313,7 +344,12 @@ export class ShaderChain {
     pass.setUniform2f('TextureSize', inW, inH);
     pass.setUniform2f('InputSize', inW, inH);
     pass.setUniform2f('OutputSize', outW, outH);
+    // The ORIGINAL emulator frame's size, distinct from this pass's input.
+    // dot.glsl computes `TEX0.xy * TextureSize / InputSize * OrigInputSize`;
+    // leaving OrigInputSize at its default zero multiplies every texture
+    // coordinate by 0 and renders pure black. 22 shaders use it.
     pass.setUniform2f('OrigTextureSize', origW, origH);
+    pass.setUniform2f('OrigInputSize', origW, origH);
     pass.setUniform2f('OriginalSize', origW, origH);
     pass.setUniform1i('Texture', 0);
 
@@ -321,9 +357,13 @@ export class ShaderChain {
     // alternation that only care about frame parity.
     const mod = pass.spec.frameCountMod;
     const fc = mod > 0 ? this.frameCount % mod : this.frameCount;
-    const fcLoc = pass.uniforms.get('FrameCount');
-    if (fcLoc !== undefined) gl.glUniform1f(fcLoc, fc);
-    pass.setUniform1f('FrameDirection', 1);
+    // FrameCount is declared `int` by 1283 of the corpus's shaders and `float`
+    // by the rest. Binding an int uniform with glUniform1f is silently ignored
+    // by the driver, so the value stays 0 forever — misc/flicker multiplies
+    // the frame by mod(FrameCount, 2.0) and rendered permanently black.
+    // Bind by the REFLECTED type, not by assumption.
+    pass.setUniformNumber('FrameCount', fc);
+    pass.setUniformNumber('FrameDirection', 1);
 
     const mvp = pass.uniforms.get('MVPMatrix');
     if (mvp !== undefined) {
