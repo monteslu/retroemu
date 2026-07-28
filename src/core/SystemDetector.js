@@ -118,6 +118,7 @@ const SYSTEM_NAMES = {
   msx: 'MSX / MSX2',
   n64: 'Nintendo 64',
   psx: 'PlayStation',
+  dreamcast: 'Sega Dreamcast',
   gametank: 'GameTank',
   wasmcart: 'WASM Cart',
   jsgame: 'JS Game',
