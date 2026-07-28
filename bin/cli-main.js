@@ -24,6 +24,8 @@ shareSdl();
 const args = process.argv.slice(2);
 let romPath = null;
 let saveDir = null;
+let biosDir = null;       // --bios-dir: where cores look for BIOS/system ROMs
+const coreOptions = {};   // --core-option key=value (repeatable), beats core defaults
 let frameSkip = 2;
 let contrast = 1.0;
 let symbols = 'block';
@@ -58,6 +60,16 @@ let rewindEnabled = true; // --no-rewind: skip rewind snapshots entirely
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--save-dir' && args[i + 1]) {
     saveDir = resolve(args[++i]);
+  } else if (args[i] === '--bios-dir' && args[i + 1]) {
+    biosDir = resolve(args[++i]);
+  } else if (args[i] === '--core-option' && args[i + 1]) {
+    const raw = args[++i];
+    const eq = raw.indexOf('=');
+    if (eq <= 0) {
+      console.error(`retroemu: --core-option expects key=value, got "${raw}"`);
+      process.exit(1);
+    }
+    coreOptions[raw.slice(0, eq)] = raw.slice(eq + 1);
   } else if (args[i] === '--frame-skip' && args[i + 1]) {
     frameSkip = parseInt(args[++i], 10);
   } else if (args[i] === '--contrast' && args[i + 1]) {
@@ -609,8 +621,11 @@ try {
       audioBridge,
       inputManager,
       saveManager,
+      coreOptions,
     });
-    await host.loadAndStart(romInfo.romPath, { saveDir, romData: romInfo.data });
+    await host.loadAndStart(romInfo.romPath, {
+      saveDir, romData: romInfo.data, systemDir: biosDir ?? undefined,
+    });
     if (cheatList?.length) {
       const applied = host.setCheats(cheatList);
       dlog(`[cheats] applied ${applied}`);
@@ -1115,6 +1130,9 @@ function printUsage() {
   console.log(``);
   console.log(`Options:`);
   console.log(`  --save-dir <dir>     Directory for save files (default: <rom-dir>/saves)`);
+  console.log(`  --bios-dir <dir>     Directory holding BIOS/system ROMs (PCE-CD, ColecoVision)`);
+  console.log(`  --core-option k=v    Set a libretro core option (repeatable),`);
+  console.log(`                       e.g. --core-option fmsx_mode=MSX2`);
   console.log(`  --frame-skip <n>     Render every Nth frame to terminal (default: 2)`);
   console.log(`  --term-fps <n>       Terminal readback rate for GL carts (default: 30)`);
   console.log(`  --contrast <n>       Contrast boost, 1.0=normal, 1.5=more contrast (default: 1.0)`);

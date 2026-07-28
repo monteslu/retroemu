@@ -82,7 +82,7 @@ The emulator auto-detects systems by file extension. All cores are from the [lib
 | System | ROM Extensions | Core |
 |--------|----------------|------|
 | ZX Spectrum | `.tzx` `.z80` `.sna` | [fuse](https://github.com/libretro/fuse-libretro) |
-| MSX / MSX2 | `.mx1` `.mx2` `.rom` `.dsk` `.cas` | [fmsx](https://github.com/libretro/fmsx-libretro) |
+| MSX / MSX2 | `.mx1` `.mx2` `.rom` `.dsk` `.cas` | [fmsx](https://github.com/libretro/fmsx-libretro) (C-BIOS bundled — see [BIOS](#bios--system-roms)) |
 
 ### Native Game Formats
 
@@ -172,7 +172,9 @@ retroemu [options] <rom-file>
 
 Options:
   --save-dir <dir>     Directory for save files (default: <rom-dir>/saves)
-  --bios-dir <dir>     Directory holding BIOS/system ROMs (MSX, PCE-CD, ...)
+  --bios-dir <dir>     Directory holding BIOS/system ROMs (PCE-CD, ColecoVision)
+  --core-option k=v    Set a libretro core option (repeatable),
+                       e.g. --core-option fmsx_mode=MSX2
   --frame-skip <n>     Render every Nth frame to terminal (default: 2)
   --contrast <n>       Contrast boost, 1.0=normal, 1.5+=enhanced (default: 1.0)
 
@@ -353,6 +355,40 @@ Keyboard input is available as a fallback for player 1:
 | F7 | Load state (slot 0) |
 | ESC | Quit |
 | Ctrl+C | Force quit |
+
+## BIOS / system ROMs
+
+Almost nothing here needs one. Cartridge systems — NES, SNES, Game Boy/GBC/GBA,
+Genesis/SMS/GG, Atari 2600/7800/Lynx, Neo Geo Pocket, WonderSwan, Vectrex, N64,
+PICO-8 — put the whole machine in the cartridge, so the ROM is all you need.
+
+Several systems that are *usually* described as needing firmware don't here,
+because the core or this package supplies a free implementation:
+
+| System | Status |
+|--------|--------|
+| Atari 800 / 5200 / XL / XE | **Bundled in the core** — atari800 falls back to AltirraOS, a from-scratch replacement |
+| ZX Spectrum | **Bundled in the core** — fuse embeds the standard Spectrum ROMs (Pentagon/Scorpion clones are the exception) |
+| MSX / MSX2 | **Bundled here** — [C-BIOS](https://cbios.sourceforge.net/) in `system/msx/` (2-clause BSD) |
+| PlayStation | **Optional** — pcsx_rearmed falls back to its HLE BIOS |
+
+Two systems genuinely need a dump you provide yourself, because no free
+replacement exists: **PC Engine CD** (`syscard3.pce`) and **ColecoVision**.
+Point `--bios-dir` at a directory containing them.
+
+### About the bundled MSX BIOS
+
+C-BIOS is an independent, from-scratch MSX BIOS — not a dump — so it ships
+freely (see `system/msx/C-BIOS-LICENSE.txt`). It runs most cartridge games but
+implements **no disk, no cassette and no BASIC**, and its MSX2/MSX2+ modes do
+not produce a picture. MSX therefore defaults to `fmsx_mode=MSX1`, which is what
+cartridge games use.
+
+If you have real MSX BIOS dumps, point `--bios-dir` at them and pick a machine:
+
+```bash
+retroemu game.rom --bios-dir ~/bios/msx --core-option fmsx_mode=MSX2
+```
 
 ## Save System
 

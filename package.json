@@ -11,6 +11,7 @@
     "bin/",
     "src/",
     "cores/",
+    "system/",
     "index.js"
   ],
   "keywords": [

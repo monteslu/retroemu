@@ -1,6 +1,7 @@
 import fs from 'fs/promises';
 import fsSync from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import { loadCore } from './CoreLoader.js';
 import { detectSystem } from './SystemDetector.js';
 import { createEmscriptenGLBridge } from './LibretroGLBridge.js';
@@ -47,11 +48,14 @@ import {
 import { LibretroGL } from './LibretroGL.js';
 
 export class LibretroHost {
-  constructor({ videoOutput, audioBridge, inputManager, saveManager }) {
+  constructor({ videoOutput, audioBridge, inputManager, saveManager, coreOptions } = {}) {
     this.videoOutput = videoOutput;
     this.audioBridge = audioBridge;
     this.inputManager = inputManager;
     this.saveManager = saveManager;
+    // User-supplied core options (--core-option key=value), applied after the
+    // core declares its variables and after any built-in override.
+    this.coreOptions = new Map(coreOptions ? Object.entries(coreOptions) : []);
     this.core = null;
     this.coreName = null;
     this.pixelFormat = RETRO_PIXEL_FORMAT_0RGB1555;
@@ -84,7 +88,6 @@ export class LibretroHost {
 
   async loadAndStart(romPath, { systemDir, saveDir, romData } = {}) {
     this.romPath = path.resolve(romPath);
-    this.systemDir = systemDir || path.dirname(this.romPath);
     this.saveDir = saveDir || path.dirname(this.romPath);
 
     // Ensure save dir exists
@@ -96,6 +99,12 @@ export class LibretroHost {
       throw new Error(`Unsupported ROM file: ${path.extname(this.romPath)}`);
     }
     this.coreName = system.core;
+
+    // System (BIOS) directory. An explicit --bios-dir always wins; otherwise
+    // fall back to the BIOS we ship for this core (see system/), and only then
+    // to the ROM's own directory.
+    this.systemDir =
+      systemDir || this._bundledSystemDir(this.coreName) || path.dirname(this.romPath);
 
 
     // For cores that use HW GL rendering, create EGL context and GL bridge
@@ -378,6 +387,20 @@ export class LibretroHost {
 
   // --- Private methods ---
 
+  /**
+   * BIOS we ship ourselves, for cores whose system has a freely
+   * redistributable BIOS. Currently only MSX (C-BIOS, 2-clause BSD — see
+   * system/msx/C-BIOS-LICENSE.txt). Returns null when we ship nothing for
+   * this core, so the caller falls back to the ROM's directory.
+   */
+  _bundledSystemDir(coreName) {
+    const BUNDLED = { fmsx: 'msx' };
+    const sub = BUNDLED[coreName];
+    if (!sub) return null;
+    const dir = path.join(fileURLToPath(new URL('../../system/', import.meta.url)), sub);
+    return fsSync.existsSync(dir) ? dir : null;
+  }
+
   _applyCoreOverrides() {
     if (this.coreName === 'parallel_n64') {
       // Force Glide64 for GPU rendering via native-gles
@@ -394,6 +417,39 @@ export class LibretroHost {
         rendererVar.value = 'hardware_gl';
         process.env.RETROEMU_DEBUG && console.error('[libretro] Override: renderer = hardware_gl');
       }
+    }
+    if (this.coreName === 'fmsx') {
+      // fmsx declares "MSX2+|MSX1|MSX2", so the generic "first option wins"
+      // default lands on MSX2+ — and MSX2/MSX2+ render a BLACK SCREEN under
+      // C-BIOS, the only MSX BIOS we can legally ship. C-BIOS implements the
+      // MSX1 BIOS well (its own docs scope it to "most ROM games"); its MSX2/
+      // MSX2+ main+sub ROMs load fine but produce no picture.
+      //
+      // MSX1 runs cartridge games, which is what this core is for here, so it
+      // is the only default that actually shows anything out of the box.
+      // Override with --core-option fmsx_mode=MSX2 if you supply real BIOS ROMs.
+      const modeVar = this.coreVariables.get('fmsx_mode');
+      if (modeVar && modeVar.value !== 'MSX1') {
+        modeVar.value = 'MSX1';
+        process.env.RETROEMU_DEBUG && console.error('[libretro] Override: fmsx_mode = MSX1');
+      }
+    }
+
+    // User overrides go LAST so they beat every built-in default above.
+    for (const [key, value] of this.coreOptions) {
+      const variable = this.coreVariables.get(key);
+      if (!variable) {
+        console.error(`retroemu: unknown core option "${key}" (core: ${this.coreName || '?'}) — ignored`);
+        continue;
+      }
+      if (variable.options && !variable.options.includes(value)) {
+        console.error(
+          `retroemu: core option ${key}="${value}" is not one of: ${variable.options.join(', ')}`,
+        );
+        continue;
+      }
+      variable.value = value;
+      process.env.RETROEMU_DEBUG && console.error(`[libretro] User option: ${key} = ${value}`);
     }
   }
 
