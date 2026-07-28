@@ -1,13 +1,14 @@
 # retroemu
 
-Terminal-based retro game emulator. Play classic console games directly in your terminal using libretro WASM cores.
+Terminal-based retro game emulator. Play classic console games directly in your
+terminal using [libretro](https://www.libretro.com/) WASM cores.
 
 - **25+ retro systems** — NES, SNES, Game Boy, Genesis, Atari, and more
 - **Native game formats** — run [wasmcart](https://github.com/wasmcart/wasmcart) `.wasc` games (WASM, any language) and [jsgame](https://github.com/monteslu/jsgamelauncher) `.jsgame` JS games — rendered right in the terminal like everything else
 - **PICO-8** — play `.p8` and `.p8.png` carts via [FAKE-08](https://github.com/jtothebell/fake-08) (MIT, no BIOS); thousands of free community carts run as-is
 - **Multiple video outputs** — terminal (ANSI art), SDL window, or both simultaneously
 - **Truecolor ANSI rendering** — half-block characters for clean pixel art
-- **2100+ controllers supported** — via SDL2 with automatic mapping
+- **2100+ controllers supported** — via [SDL2](https://www.libsdl.org) with automatic mapping
 - **Low-latency audio** — direct SDL2 audio output
 - **Save states & battery saves** — automatic SRAM persistence
 
@@ -93,7 +94,7 @@ emulation). They render into the same terminal (ANSI art) / SDL pipeline as ever
 | wasmcart | `.wasm` `.wasc` | [wasmcart](https://github.com/wasmcart/wasmcart) (2026) | Standalone WASM games — compile from any language to the wasmcart ABI. Software rendering or GPU-accelerated (OpenGL ES 3.0). |
 | jsgame | `.jsgame` `.jsg` | [rungame](https://www.npmjs.com/package/rungame) (2024) | JavaScript games (canvas / WebGL) run in a sandboxed realm. retroemu drives them headless and renders the frames itself. |
 
-GL carts (those importing from the `gl` WASM module) are automatically detected. retroemu creates an EGL context via [native-gles](../native-gles/) and provides GPU-accelerated rendering. The GL output is read back via `glReadPixels` for terminal display, or rendered directly to an SDL window.
+GL carts (those importing from the `gl` WASM module) are automatically detected. retroemu creates an EGL context via [native-gles](https://github.com/monteslu/native-gles) and provides GPU-accelerated rendering. The GL output is read back via `glReadPixels` for terminal display, or rendered directly to an SDL window.
 
 Just run `retroemu <rom-file>` and the correct core loads automatically based on the file extension.
 
@@ -101,11 +102,12 @@ Just run `retroemu <rom-file>` and the correct core loads automatically based on
 
 ## How It Works
 
-The emulator loads libretro cores compiled to WebAssembly via Emscripten. Each frame, the WASM core executes one tick of the emulated CPU, then calls back into JavaScript with:
+The emulator loads libretro cores compiled to WebAssembly via
+[Emscripten](https://emscripten.org). Each frame, the WASM core executes one tick of the emulated CPU, then calls back into JavaScript with:
 
-- **Video**: A raw pixel framebuffer (RGB565, XRGB8888, or 0RGB1555) that gets converted to RGBA and rendered to the terminal as truecolor ANSI art via [chafa-wasm](https://github.com/nicholasgasior/chafa-wasm) in a worker thread
+- **Video**: A raw pixel framebuffer (RGB565, XRGB8888, or 0RGB1555) that gets converted to RGBA and rendered to the terminal as truecolor ANSI art via [@monteslu/chafa-wasm](https://github.com/monteslu/chafa-wasm) in a worker thread
 - **Audio**: Interleaved int16 stereo samples sent directly to SDL2 audio device (via [@kmamal/sdl](https://github.com/kmamal/node-sdl))
-- **Input**: Polled from physical gamepads through the W3C Gamepad API (via [gamepad-node](../gamepad-node/)), with keyboard fallback
+- **Input**: Polled from physical gamepads through the W3C Gamepad API (via [gamepad-node](https://github.com/monteslu/gamepad-node)), with keyboard fallback
 
 ```
  retroemu <rom>
@@ -123,8 +125,8 @@ The emulator loads libretro cores compiled to WebAssembly via Emscripten. Each f
 
 ## Prerequisites
 
-- **Node.js** >= 22.0.0 (for ES modules and worker threads)
-- **Emscripten SDK** (only needed for building cores from source)
+- **[Node.js](https://nodejs.org)** >= 22.0.0 (for ES modules and worker threads)
+- **[Emscripten SDK](https://emscripten.org)** (only needed for building cores from source)
 - **A truecolor terminal** (iTerm2, Kitty, Alacritty, Windows Terminal, GNOME Terminal, etc.)
 
 ## Installation
@@ -135,7 +137,7 @@ npm install -g retroemu
 
 ## Building Cores
 
-Cores must be compiled from C/C++ source to WASM using Emscripten.
+Cores must be compiled from C/C++ source to WASM using [Emscripten](https://emscripten.org).
 
 Build all cores:
 
@@ -170,6 +172,7 @@ retroemu [options] <rom-file>
 
 Options:
   --save-dir <dir>     Directory for save files (default: <rom-dir>/saves)
+  --bios-dir <dir>     Directory holding BIOS/system ROMs (MSX, PCE-CD, ...)
   --frame-skip <n>     Render every Nth frame to terminal (default: 2)
   --contrast <n>       Contrast boost, 1.0=normal, 1.5+=enhanced (default: 1.0)
 
@@ -307,7 +310,7 @@ The emulator uses [@monteslu/chafa-wasm](https://github.com/monteslu/chafa-wasm)
 
 ### Gamepad
 
-Any gamepad recognized by [gamepad-node](../gamepad-node/) works automatically. Buttons are mapped positionally — the south face button is always B, east is A, etc. — regardless of the controller's printed labels.
+Any gamepad recognized by [gamepad-node](https://github.com/monteslu/gamepad-node) works automatically. Buttons are mapped positionally — the south face button is always B, east is A, etc. — regardless of the controller's printed labels.
 
 | Gamepad Button | Libretro |
 |---------------|----------|
@@ -394,7 +397,7 @@ retroemu/
 
 ### WASM Cart Runner
 
-When a `.wasm` or `.wasc` file is loaded, retroemu uses [wasmcart](../wasmcart/) instead of libretro:
+When a `.wasm` or `.wasc` file is loaded, retroemu uses [wasmcart](https://github.com/wasmcart/wasmcart) instead of libretro:
 
 ```
  retroemu <cart.wasc>
@@ -413,7 +416,7 @@ For GL carts, the readback pipeline is: `glFinish()` → `glReadPixels(RGBA)` �
 
 ### GPU-Accelerated Libretro Cores (N64)
 
-Some libretro cores use hardware-accelerated GPU rendering via `RETRO_ENVIRONMENT_SET_HW_RENDER`. retroemu supports this using [webgl-node](../webgl-node/) to provide a WebGL2 context backed by [native-gles](../native-gles/).
+Some libretro cores use hardware-accelerated GPU rendering via `RETRO_ENVIRONMENT_SET_HW_RENDER`. retroemu supports this using [webgl-node](https://github.com/monteslu/webgl-node) to provide a WebGL2 context backed by [native-gles](https://github.com/monteslu/native-gles).
 
 ```
  retroemu <rom.z64>
@@ -429,7 +432,7 @@ Some libretro cores use hardware-accelerated GPU rendering via `RETRO_ENVIRONMEN
      glFinish() → glReadPixels(FBO 0) → vertical flip → onCartFrameRGBA → SDL/chafa
 ```
 
-The N64 core (parallel-n64) uses the Glide64 GPU plugin — the same one used by [N64Wasm](https://github.com/nicholasgasior/nicholasgasior.github.io) for full-speed browser N64 emulation.
+The N64 core (parallel-n64) uses the Glide64 GPU plugin — the same one used by [N64Wasm](https://github.com/nbarkhina/N64Wasm) for full-speed browser N64 emulation.
 
 ### Key Modules
 
@@ -598,12 +601,12 @@ needs no ROM and no core.
 
 | Package | Purpose |
 |---------|---------|
-| [gamepad-node](../gamepad-node/) | W3C Gamepad API for Node.js via SDL2 — 2100+ controllers with standard mapping |
+| [gamepad-node](https://github.com/monteslu/gamepad-node) | W3C Gamepad API for Node.js via SDL2 — 2100+ controllers with standard mapping |
 | [@kmamal/sdl](https://github.com/kmamal/node-sdl) | Native SDL2 bindings for Node.js — audio output, SDL window rendering, gamepad input |
-| [chafa-wasm](https://github.com/nicholasgasior/chafa-wasm) | Image-to-ANSI conversion — auto-detects Sixel, Kitty, or Unicode block art |
-| [wasmcart](../wasmcart/) | WASM cart host — loads .wasm/.wasc carts, provides ABI (input, audio, assets, GL) |
-| [native-gles](../native-gles/) | OpenGL ES 3.0 Node.js addon — EGL pbuffer context + ~100 GL function bindings |
-| [webgl-node](../webgl-node/) | WebGL2 context for Node.js — provides canvas + WebGL2RenderingContext backed by native-gles |
+| [@monteslu/chafa-wasm](https://github.com/monteslu/chafa-wasm) | Image-to-ANSI conversion — auto-detects Sixel, Kitty, or Unicode block art |
+| [wasmcart](https://github.com/wasmcart/wasmcart) | WASM cart host — loads .wasm/.wasc carts, provides ABI (input, audio, assets, GL) |
+| [native-gles](https://github.com/monteslu/native-gles) | OpenGL ES 3.0 Node.js addon — EGL pbuffer context + ~100 GL function bindings |
+| [webgl-node](https://github.com/monteslu/webgl-node) | WebGL2 context for Node.js — provides canvas + WebGL2RenderingContext backed by native-gles |
 | [hsync](https://www.npmjs.com/package/hsync) | Remote play signaling — brokers the WebRTC handshake, then drops out of the loop |
 | [node-datachannel](https://github.com/murat-dogan/node-datachannel) | WebRTC data channels in Node (libdatachannel) — the P2P transport for remote play |
 
