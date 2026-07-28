@@ -1,4 +1,5 @@
 import fs from 'fs/promises';
+import fsSync from 'fs';
 import path from 'path';
 import { loadCore } from './CoreLoader.js';
 import { detectSystem } from './SystemDetector.js';
@@ -141,6 +142,18 @@ export class LibretroHost {
         process.env.RETROEMU_DEBUG && console.error(`[libretro] Emscripten GL context initialized (handle=${handle})`);
       }
     }
+
+    // Mirror the system directory INTO the core's virtual filesystem.
+    //
+    // A wasm core cannot see the host filesystem. We were answering
+    // GET_SYSTEM_DIRECTORY with a real host path, which simply does not exist
+    // inside Emscripten's MEMFS -- so any core that opens a BIOS by path found
+    // nothing. fmsx is the loud case: it copies the reply into ProgDir, chdir()s
+    // there and fopen()s MSX.ROM, and without it every MSX cart renders a black
+    // screen while still loading "successfully" and returning frames.
+    //
+    // Must run BEFORE retro_init: cores read GET_SYSTEM_DIRECTORY during init.
+    this.vfsSystemDir = this._mirrorSystemDir();
 
     // Register all libretro callbacks
     this._registerCallbacks();
@@ -470,7 +483,9 @@ export class LibretroHost {
       }
 
       case RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY: {
-        const strPtr = this._allocString(this.systemDir);
+        // The MEMFS mirror when there is one -- a host path is meaningless
+        // inside wasm. See _mirrorSystemDir.
+        const strPtr = this._allocString(this.vfsSystemDir ?? this.systemDir);
         mod.setValue(dataPtr, strPtr, 'i32');
         return true;
       }
@@ -620,6 +635,55 @@ export class LibretroHost {
         }
         return false;
     }
+  }
+
+  /**
+   * Copy the host's system directory into the core's MEMFS at /system, and
+   * return that path for GET_SYSTEM_DIRECTORY to report.
+   *
+   * Only BIOS-shaped files, and only small ones: a system directory can also
+   * hold multi-megabyte databases and whole machine trees, and MEMFS is real
+   * wasm memory. Everything a core opens by path is a ROM/font-sized blob.
+   *
+   * Best effort by design -- a core that needs no BIOS must still start when
+   * the directory is missing or unreadable.
+   */
+  _mirrorSystemDir() {
+    const mod = this.core;
+    if (!mod.FS || !this.systemDir) return this.systemDir;
+
+    const MAX_FILE = 4 * 1024 * 1024;
+    const WANTED = /\.(rom|bin|fnt|sys|dat|bios|col|pce|md|sms|e2p)$/i;
+    const DEST = '/system';
+
+    let names;
+    try {
+      names = fsSync.readdirSync(this.systemDir);
+    } catch {
+      return this.systemDir; // nothing to mirror; leave the reply as-is
+    }
+
+    try { mod.FS.mkdir(DEST); } catch { /* already there */ }
+
+    let copied = 0;
+    for (const name of names) {
+      const src = path.join(this.systemDir, name);
+      let st;
+      try { st = fsSync.statSync(src); } catch { continue; }
+      // Subdirectories (blueMSX-style Machines/ trees) are NOT walked: no core
+      // we ship needs them, and recursing risks copying hundreds of megabytes.
+      if (!st.isFile() || st.size > MAX_FILE || !WANTED.test(name)) continue;
+      try {
+        mod.FS.writeFile(`${DEST}/${name}`, fsSync.readFileSync(src));
+        copied++;
+      } catch { /* skip the ones we cannot read */ }
+    }
+
+    process.env.RETROEMU_DEBUG
+      && console.error(`[libretro] mirrored ${copied} system file(s) to ${DEST}`);
+    // Only claim /system if something is actually there. An empty directory
+    // would be a worse answer than the host path for a core that needs none.
+    return copied ? DEST : this.systemDir;
   }
 
   _loadGame(romData) {
