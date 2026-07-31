@@ -6,3 +6,8 @@ export { SaveManager } from './src/core/SaveManager.js';
 export { loadCore } from './src/core/CoreLoader.js';
 export { detectSystem, getSupportedExtensions, getSystemName } from './src/core/SystemDetector.js';
 export { loadRom, isZipFile } from './src/core/RomLoader.js';
+export { ActiveBezelPackage, validateManifest as validateActiveBezelManifest } from 'active-bezel/package';
+export { ActiveBezelRuntime, AB_EVENT as ACTIVE_BEZEL_EVENT } from 'active-bezel/runtime';
+export { ActiveBezelConfig } from 'active-bezel/config';
+export { ActiveBezelRegions, CORE_REGIONS as ACTIVE_BEZEL_REGIONS } from 'active-bezel/regions';
+export { identifyRom, matchActiveBezel } from 'active-bezel/matcher';

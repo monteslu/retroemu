@@ -1,0 +1,29 @@
+{
+  "format": "active-bezel",
+  "formatVersion": 1,
+  "id": "org.romdeck.reference.smb-expanded",
+  "name": "Super Mario Expanded View Experiment",
+  "version": "1.0.0",
+  "author": "Romdeck",
+  "entry": "main.wasm",
+  "runtime": {
+    "abi": "active-bezel-1",
+    "renderer": "gpu-command-v1",
+    "internalResolution": [640, 360],
+    "extensions": []
+  },
+  "games": [{
+    "platform": "nes",
+    "sha256": "0b3d9e1f01ed1668205bab34d6c82b0e281456e137352e4f36a9b2cfa3b66dea"
+  }],
+  "requires": [
+    { "region": "system_ram", "minSize": 2048 },
+    { "region": "nes_nametables", "minSize": 2048 }
+  ],
+  "pictureEffect": "scene",
+  "settings": [
+    { "key": "layout", "label": "Layout", "type": "choice", "default": "ahead", "choices": ["ahead", "centered"] },
+    { "key": "show_status", "label": "Expanded status", "type": "boolean", "default": true },
+    { "key": "high_jump", "label": "High jump experiment", "type": "boolean", "default": false }
+  ]
+}

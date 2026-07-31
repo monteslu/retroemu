@@ -1,0 +1,18 @@
+{
+  "source": "Romdev live-memory verification plus the public Adventure RAM map",
+  "systemRam": {
+    "playerRoom": "0x0a",
+    "playerX": "0x0b",
+    "playerY": "0x0c",
+    "heldObject": "0x1d",
+    "dragons": "0x24..0x32",
+    "magnet": "0x33..0x35",
+    "sword": "0x36..0x38",
+    "chalice": "0x39..0x3b",
+    "bridge": "0x3c..0x3e",
+    "keys": "0x3f..0x47",
+    "castleGates": "0x48..0x4a",
+    "bat": "0x4b..0x4f"
+  },
+  "verified": ["playerRoom", "playerX", "playerY"]
+}

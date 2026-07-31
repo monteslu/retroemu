@@ -1,0 +1,33 @@
+export default [{
+  files: ['src/**/*.js', 'bin/**/*.js', 'index.js'],
+  ignores: ['src/video/videoWorker.js'],
+  languageOptions: {
+    ecmaVersion: 'latest',
+    sourceType: 'module',
+    globals: {
+      Buffer: 'readonly',
+      console: 'readonly',
+      performance: 'readonly',
+      process: 'readonly',
+      setInterval: 'readonly',
+      clearInterval: 'readonly',
+      setTimeout: 'readonly',
+      clearTimeout: 'readonly',
+      setImmediate: 'readonly',
+      navigator: 'readonly',
+      fetch: 'readonly',
+      structuredClone: 'readonly',
+      TextDecoder: 'readonly',
+      TextEncoder: 'readonly',
+      WebAssembly: 'readonly',
+      SharedArrayBuffer: 'readonly',
+      Atomics: 'readonly',
+      URL: 'readonly',
+    },
+  },
+  rules: {
+    'no-undef': 'error',
+    'no-unreachable': 'error',
+    'no-constant-condition': ['error', { checkLoops: false }],
+  },
+}];

@@ -1,0 +1,26 @@
+{
+  "format": "active-bezel",
+  "formatVersion": 1,
+  "id": "org.romdeck.reference.lua-starter",
+  "name": "Lua Active Bezel Starter",
+  "version": "1.0.0",
+  "author": "Romdeck",
+  "entry": "main.wasm",
+  "runtime": {
+    "abi": "active-bezel-1",
+    "renderer": "cpu-rgba-v1",
+    "language": "lua54-wasmcart",
+    "luaAssets": "app/",
+    "internalResolution": [640, 360],
+    "extensions": []
+  },
+  "games": [],
+  "compatible": [{
+    "platform": "atari2600",
+    "size": 4096,
+    "signatures": [{ "offset": 0, "bytes": "4ceff278" }]
+  }],
+  "requires": [],
+  "pictureEffect": "game",
+  "settings": []
+}

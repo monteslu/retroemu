@@ -1,0 +1,14 @@
+{
+  "source": "Romdev cheat-map lookup for the exact World ROM",
+  "cpuAddressBase": "0xc000",
+  "systemRam": {
+    "beam": "0x104d",
+    "missileTanks": "0x1050",
+    "life": "0x1051",
+    "energyTanks": "0x1052",
+    "missiles": ["0x1053", "0x1054"],
+    "items": "0x1045",
+    "playTime": ["0x1098", "0x1099"],
+    "lava": "0x1089"
+  }
+}

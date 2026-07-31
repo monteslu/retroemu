@@ -167,6 +167,9 @@ source ./emsdk_env.sh
 
 ## Usage
 
+Active Bezels -- optional ROM-specific WASM companions that own the complete
+16:9 picture -- are documented in [docs/ACTIVE_BEZELS.md](docs/ACTIVE_BEZELS.md).
+
 ```
 retroemu [options] <rom-file>
 

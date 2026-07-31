@@ -19,8 +19,17 @@ export class SDLRenderer {
     this.width = width;
     this.height = height;
 
+    const mouse = sdl.mouse.position;
+    const activeDisplay = sdl.video.displays.find((display) => {
+      const { x, y, width: w, height: h } = display.geometry;
+      return mouse.x >= x && mouse.x < x + w && mouse.y >= y && mouse.y < y + h;
+    }) || sdl.video.displays[0];
+
     this.window = sdl.video.createWindow({
       title: this.title,
+      // Multi-monitor desktops should open the game where the user currently
+      // is, not whichever output SDL happens to enumerate first.
+      display: activeDisplay,
       width: width * this.scale,
       height: height * this.scale,
       resizable: true,
@@ -29,6 +38,7 @@ export class SDLRenderer {
       fullscreen: this.fullscreen,
       opengl: this.opengl,
     });
+    this.window.focus();
     process.env.RETROEMU_DEBUG && console.error(`[sdl] window created: vsync=${this.window.vsync} accelerated=${this.window.accelerated}`);
 
     this.window.on('close', () => {

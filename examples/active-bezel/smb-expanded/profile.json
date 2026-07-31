@@ -1,0 +1,17 @@
+{
+  "source": "Romdev exact-ROM cheat and region inspection",
+  "systemRam": {
+    "playerForm": ["0x0754", "0x0756"],
+    "invincibility": ["0x079e", "0x079f"],
+    "lives": "0x075a",
+    "level": "0x075c",
+    "scrollingEnabled": "0x0732",
+    "suspendedInAir": "0x001d"
+  },
+  "regions": {
+    "nes_nametables": "Current two-screen CIRAM window",
+    "nes_chr": "Live pattern-table bytes",
+    "nes_palette": "Live NES palette"
+  },
+  "experimentNote": "The v1 reference owns a widescreen scene and proves access to the live two-screen world. Full unseen-world reconstruction remains game-profile logic, not a host special case."
+}

@@ -1,7 +1,7 @@
 // retroemu main — the actual CLI. Loaded by bin/cli.js AFTER the jsgame re-exec
 // decision, so the heavy SDL/GL imports below init exactly once (no double-init crash on macOS).
-import { resolve, dirname, basename } from 'path';
-import { existsSync, writeFileSync, readFileSync } from 'fs';
+import { resolve, dirname, basename, extname, join } from 'path';
+import { existsSync, writeFileSync, readFileSync, statSync, watch as watchFs } from 'fs';
 import { LibretroHost } from '../src/core/LibretroHost.js';
 import { VideoOutput } from '../src/video/VideoOutput.js';
 import { AudioBridge } from '../src/audio/AudioBridge.js';
@@ -56,6 +56,10 @@ let hostRemote = false;   // --host-remote: start hosting immediately
 let cheatList = null;     // --cheats: [{code, enabled, desc}]
 let ffSpeed = 4;          // --ff-speed: multiplier the overlay/frontend fast-forwards at
 let rewindEnabled = true; // --no-rewind: skip rewind snapshots entirely
+let activeBezelPath = null;
+let activeBezelConfig = {};
+let activeBezelForce = false;
+let activeBezelDev = false;
 
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--save-dir' && args[i + 1]) {
@@ -120,6 +124,27 @@ for (let i = 0; i < args.length; i++) {
     if (Number.isFinite(v) && v >= 0) ffSpeed = v;
   } else if (args[i] === '--no-rewind') {
     rewindEnabled = false;
+  } else if (args[i] === '--active-bezel' && args[i + 1]) {
+    activeBezelPath = resolve(args[++i]);
+  } else if (args[i] === '--active-bezel-auto') {
+    // Discover the same-basename sidecar next to the ROM -- either a packed
+    // `Game.ab` or an unpacked `Game.ab/` directory works, matching romdev's
+    // useActiveBezel discovery. A separate flag rather than a bare
+    // --active-bezel: the ROM path follows positionally, and a bare form
+    // would swallow it as the package path.
+    activeBezelPath = 'discover';
+  } else if (args[i] === '--active-bezel-config' && args[i + 1]) {
+    const raw = args[++i];
+    try {
+      activeBezelConfig = JSON.parse(raw.startsWith('@') ? readFileSync(raw.slice(1), 'utf8') : raw);
+    } catch (err) {
+      console.error(`--active-bezel-config: ${err.message}`);
+      process.exit(1);
+    }
+  } else if (args[i] === '--active-bezel-force') {
+    activeBezelForce = true;
+  } else if (args[i] === '--active-bezel-dev') {
+    activeBezelDev = true;
   } else if (args[i] === '--cheats' && args[i + 1]) {
     const raw = args[++i];
     try {
@@ -514,6 +539,11 @@ let cartHost = null;
 let cartRunning = false;
 let jsGameSession = null;
 let jsGameRunning = false;
+let activeBezel = null;
+let activeBezelNormalAspect = null;
+let activeBezelWatcher = null;
+let activeBezelReloadTimer = null;
+videoOutput.onDisplayChange = (width, height) => activeBezel?.setDisplay?.(width, height);
 let _realGetGamepads = null; // real SDL getGamepads, saved before createHostSession clobbers navigator
 
 async function shutdown() {
@@ -543,6 +573,8 @@ async function shutdown() {
   }
 
   if (host) {
+    activeBezel?.shutdown();
+    activeBezelWatcher?.close();
     await host.shutdown();
   }
 
@@ -559,6 +591,59 @@ async function shutdown() {
     process.stdout.write('\x1b[?1049l\x1b[?25h');
   }
   process.exit(0);
+}
+
+async function loadActiveBezel() {
+  const { ActiveBezelRuntime } = await import('active-bezel/runtime');
+  const next = await ActiveBezelRuntime.create({
+    packagePath: activeBezelPath,
+    host,
+    romBytes: romInfo.data,
+    platform: system.system,
+    config: activeBezel?.config?.values ?? activeBezelConfig,
+    force: activeBezelForce,
+    inputManager,
+    allowGpu: !needsGL,
+    outputWidth: preferredWidth || 1920,
+    outputHeight: preferredHeight || 1080,
+  });
+  const previous = activeBezel;
+  if (!previous) activeBezelNormalAspect = videoOutput.displayAspectRatio;
+  activeBezel = next;
+  videoOutput.setAspectRatio(16 / 9);
+  videoOutput.setFrameProcessor(
+    (rgba, width, height, frame) => activeBezel.processFrame(rgba, width, height, frame),
+    { effectScope: activeBezel.package.manifest.pictureEffect },
+  );
+  previous?.shutdown();
+  dlog(`[active-bezel] ${activeBezel.package.manifest.name} (${activeBezel.match.level})`);
+  return activeBezel.status();
+}
+
+function disableActiveBezel() {
+  activeBezel?.shutdown();
+  activeBezel = null;
+  videoOutput.setFrameProcessor(null);
+  if (activeBezelNormalAspect) videoOutput.setAspectRatio(activeBezelNormalAspect);
+  activeBezelNormalAspect = null;
+  return { enabled: false };
+}
+
+function watchActiveBezel() {
+  if (!activeBezelDev || !activeBezelPath || activeBezelWatcher) return;
+  activeBezelWatcher = watchFs(activeBezelPath, { persistent: false }, () => {
+    clearTimeout(activeBezelReloadTimer);
+    activeBezelReloadTimer = setTimeout(async () => {
+      try {
+        await loadActiveBezel();
+        activeBezel.event?.(6);
+        console.error('[active-bezel] reloaded');
+      } catch (err) {
+        console.error(`[active-bezel] reload rejected; keeping previous instance: ${err.message}`);
+      }
+    }, 75);
+  });
+  dlog(`[active-bezel] watching ${statSync(activeBezelPath).isDirectory() ? 'directory' : 'archive'} for changes`);
 }
 
 process.on('SIGINT', shutdown);
@@ -586,10 +671,12 @@ if (process.stdin.isTTY) {
       // F7 = load state (ESC [ 1 8 ~)
       if (key === '\x1b[18~') {
         await host.loadState(0);
+        activeBezel?.event?.(2);
       }
       // F1 = reset (ESC [ 1 1 ~)
       if (key === '\x1b[11~') {
         host.reset();
+        activeBezel?.event?.(1);
       }
     }
   });
@@ -609,6 +696,9 @@ try {
       system,
       ffSpeed,
       rewindEnabled,
+      getActiveBezel: () => activeBezel,
+      reloadActiveBezel: () => loadActiveBezel(),
+      disableActiveBezel,
     });
   }
   if (isCart) {
@@ -626,6 +716,29 @@ try {
     await host.loadAndStart(romInfo.romPath, {
       saveDir, romData: romInfo.data, systemDir: biosDir ?? undefined,
     });
+    if (activeBezelPath === 'discover') {
+      const sidecar = join(dirname(romPath),
+        basename(romPath, extname(romPath)) + '.ab');
+      if (existsSync(sidecar)) {
+        activeBezelPath = sidecar;
+      } else {
+        console.error(`[active-bezel] no sidecar found at ${sidecar}`);
+        activeBezelPath = null;
+      }
+    }
+    if (activeBezelPath) {
+      try {
+        await loadActiveBezel();
+        watchActiveBezel();
+      } catch (err) {
+        // An optional enhancement must never prevent the ROM from launching.
+        // Romdeck receives the null status over IPC and can explain the
+        // package error while the ordinary game remains playable.
+        console.error(`[active-bezel] disabled at launch: ${err.message}`);
+        activeBezel = null;
+        videoOutput.setFrameProcessor(null);
+      }
+    }
     if (cheatList?.length) {
       const applied = host.setCheats(cheatList);
       dlog(`[cheats] applied ${applied}`);
@@ -640,6 +753,8 @@ try {
         videoOutput,
         inputManager,
         shutdown,
+        getActiveBezel: () => activeBezel,
+        disableActiveBezel,
         romPath: romInfo.romPath,
         saveDir,
       });
@@ -1150,7 +1265,14 @@ function printUsage() {
                        separate CPU post-process family.`);
   console.log(`  --video-filter <f>   CRT post-process: none, sharp, scanlines, crt (SDL modes)
   --ff-speed <n>       Fast-forward multiplier, 0=uncapped (default: 4)
-  --no-rewind          Disable rewind history (saves memory + per-frame work)`);
+  --no-rewind          Disable rewind history (saves memory + per-frame work)
+  --active-bezel <ab>  Attach an Active Bezel v1 package (.ab or unpacked directory)
+  --active-bezel-auto  Discover the same-basename sidecar beside the ROM --
+                       packed Game.ab or an unpacked Game.ab/ directory
+  --active-bezel-config <json|@file>
+                       Per-game bezel preferences
+  --active-bezel-force Allow a manually selected package on a non-matching ROM
+  --active-bezel-dev   Watch the package and hot reload valid changes`);
   console.log(`  --cheats <json>      Cheat codes: inline JSON or @file ([{code, enabled, desc}])`);
   console.log(`  --host-remote        Host this game for remote play; prints a share code`);
   console.log(`  --join <code>        Join a hosted game as player 2 (no ROM needed)`);

@@ -47,6 +47,7 @@ async function resolveCorePaths(coreName) {
 
 export async function loadCore(coreName, { glBridge, glCanvas } = {}) {
   const { gluePath, wasmPath: coreWasmPath, source } = await resolveCorePaths(coreName);
+  let capturedMemory = null;
 
   if (!existsSync(gluePath)) {
     throw new Error(
@@ -102,9 +103,27 @@ export async function loadCore(coreName, { glBridge, glCanvas } = {}) {
       }
 
       WebAssembly.instantiate(wasmBinary, info).then(result => {
+        capturedMemory = result.instance.exports.memory
+          ?? Object.values(result.instance.exports).find((value) => value instanceof WebAssembly.Memory)
+          ?? null;
         if (glBridge._setMemory && result.instance.exports.memory) {
           glBridge._setMemory(result.instance.exports.memory);
         }
+        receiveInstance(result.instance, result.module);
+      });
+      return {};
+    };
+  } else {
+    // Emscripten publishes HEAPU8 but normally hides the WebAssembly.Memory
+    // object in its generated closure. Capture the instance here so an Active
+    // Bezel module can import that exact same memory for zero-copy region
+    // access. The core and bezel still execute sequentially on one thread.
+    const wasmBinary = readFileSync(coreWasmPath);
+    moduleOpts.instantiateWasm = (info, receiveInstance) => {
+      WebAssembly.instantiate(wasmBinary, info).then((result) => {
+        capturedMemory = result.instance.exports.memory
+          ?? Object.values(result.instance.exports).find((value) => value instanceof WebAssembly.Memory)
+          ?? null;
         receiveInstance(result.instance, result.module);
       });
       return {};
@@ -113,6 +132,7 @@ export async function loadCore(coreName, { glBridge, glCanvas } = {}) {
 
   // Instantiate the WASM module
   const wasmModule = await createModule(moduleOpts);
+  if (capturedMemory) wasmModule.wasmMemory = capturedMemory;
 
   // Verify it exposes the libretro API
   if (typeof wasmModule._retro_api_version !== 'function') {

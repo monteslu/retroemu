@@ -77,6 +77,7 @@ export class ControlChannel {
       fullscreen: true,
       videoFilter: true,
       remotePlay: true,
+      activeBezel: !!this.ctx.getActiveBezel?.(),
     };
   }
 
@@ -143,6 +144,7 @@ export class ControlChannel {
       system: this.ctx.system?.name ?? null,
       stateSupported: !!host,
       av: host?.systemAVInfo ?? null,
+      activeBezel: this.ctx.getActiveBezel?.()?.status() ?? null,
     });
   }
 
@@ -237,6 +239,7 @@ export class ControlChannel {
       case 'reset':
         needHost().reset();
         this.rewind.clear();
+        this.ctx.getActiveBezel?.()?.event?.(1);
         return {};
 
       case 'saveState': {
@@ -258,6 +261,7 @@ export class ControlChannel {
         const ok = h.unserializeState(Buffer.from(params.stateB64, 'base64'));
         if (!ok) throw new Error('core rejected the state blob');
         this.rewind.clear();
+        this.ctx.getActiveBezel?.()?.event?.(2);
         return {};
       }
 
@@ -295,6 +299,7 @@ export class ControlChannel {
         if (!entry) throw new Error('no rewind history');
         const ok = h.unserializeState(entry.data);
         if (!ok) throw new Error('core rejected rewind state');
+        this.ctx.getActiveBezel?.()?.event?.(3);
         return { frame: entry.frame, depth: this.rewind.depth };
       }
 
@@ -423,6 +428,27 @@ export class ControlChannel {
       case 'setVideoFilter': {
         this.ctx.videoOutput?.setFilter?.(params.filter ?? 'none');
         return { filter: params.filter ?? 'none' };
+      }
+
+      case 'activeBezelStatus': {
+        const bezel = this.ctx.getActiveBezel?.();
+        return bezel ? bezel.status() : { enabled: false, package: null };
+      }
+
+      case 'activeBezelSetConfig': {
+        const bezel = this.ctx.getActiveBezel?.();
+        if (!bezel) throw new Error('no Active Bezel is attached');
+        const value = bezel.setConfig(params.key, params.value);
+        return { key: params.key, value, status: bezel.status() };
+      }
+
+      case 'activeBezelDisable': {
+        return this.ctx.disableActiveBezel?.() ?? { enabled: false };
+      }
+
+      case 'activeBezelReload': {
+        if (!this.ctx.reloadActiveBezel) throw new Error('Active Bezel reload is unavailable');
+        return this.ctx.reloadActiveBezel();
       }
 
       case 'setInputMap': {

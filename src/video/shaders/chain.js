@@ -424,7 +424,7 @@ export class ShaderChain {
    * @param {{x:number,y:number,w:number,h:number}} viewport where the final
    *        pass draws on the default framebuffer (already letterboxed)
    */
-  render(pixels, w, h, viewport) {
+  render(pixels, w, h, viewport, readback = false) {
     // Upload the emulator frame once. texSubImage2D on an unchanged size
     // avoids reallocating the texture every frame.
     gl.glActiveTexture(GL_TEXTURE0);
@@ -451,8 +451,14 @@ export class ShaderChain {
         // any scale it declares is ignored, exactly as RetroArch does.
         outW = viewport.w;
         outH = viewport.h;
-        gl.glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        gl.glViewport(viewport.x, viewport.y, viewport.w, viewport.h);
+        if (readback) {
+          this._ensureTarget(pass, outW, outH);
+          gl.glBindFramebuffer(GL_FRAMEBUFFER, pass.fbo);
+          gl.glViewport(0, 0, outW, outH);
+        } else {
+          gl.glBindFramebuffer(GL_FRAMEBUFFER, 0);
+          gl.glViewport(viewport.x, viewport.y, viewport.w, viewport.h);
+        }
       } else {
         const size = this._sizeFor(pass.spec, inW, inH, viewport.w, viewport.h);
         outW = size.w;
@@ -465,13 +471,39 @@ export class ShaderChain {
       this._bindInput(pass, inTex);
       this._drawQuad(pass, inW, inH, outW, outH, w, h);
 
-      inTex = isLast ? inTex : pass.tex;
+      inTex = isLast && !readback ? inTex : pass.tex;
       inW = outW;
       inH = outH;
     }
 
     gl.glBindFramebuffer(GL_FRAMEBUFFER, 0);
     this.frameCount++;
+    if (readback) {
+      const length = viewport.w * viewport.h * 4;
+      if (!this._readback || this._readback.length !== length) {
+        this._readback = new Uint8Array(length);
+        this._readbackFlipped = new Uint8Array(length);
+      }
+      const last = this.passes[this.passes.length - 1];
+      gl.glBindFramebuffer(GL_FRAMEBUFFER, last.fbo);
+      gl.glReadPixels(0, 0, viewport.w, viewport.h, GL_RGBA, GL_UNSIGNED_BYTE, this._readback);
+      const row = viewport.w * 4;
+      for (let y = 0; y < viewport.h; y++) {
+        this._readbackFlipped.set(
+          this._readback.subarray((viewport.h - y - 1) * row, (viewport.h - y) * row),
+          y * row,
+        );
+      }
+      gl.glBindFramebuffer(GL_FRAMEBUFFER, 0);
+      return this._readbackFlipped;
+    }
+    return null;
+  }
+
+  renderToPixels(pixels, width, height) {
+    return this.render(pixels, width, height, {
+      x: 0, y: 0, w: width, h: height,
+    }, true);
   }
 
   /** Every parameter across the chain, for a UI to render. */

@@ -108,6 +108,16 @@ export class GLRenderer {
     this.frames++;
   }
 
+  filterFrame(pixels, width, height) {
+    if (!this.chain || !width || !height) return { pixels, width, height };
+    gl.makeCurrent?.();
+    return {
+      pixels: this.chain.renderToPixels(pixels, width, height),
+      width,
+      height,
+    };
+  }
+
   /** Shader parameters, for a UI to render and tweak. */
   parameters() {
     return this.chain?.parameters() ?? [];

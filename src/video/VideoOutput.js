@@ -47,6 +47,15 @@ export class VideoOutput {
 
     // Callback for frame capture (future vibe-eyes integration)
     this.onFrameCallback = options.onFrame || null;
+    this.onDisplayChange = options.onDisplayChange || null;
+    // Optional synchronous whole-frame transform. Active Bezels use this to
+    // replace the core-sized picture with their complete 16:9 composition.
+    // It is null on the ordinary path, so existing sessions pay no copy or
+    // dispatch cost beyond this branch.
+    this.frameProcessor = null;
+    this.frameProcessorEffectScope = 'scene';
+    this._filterAppliedBeforeProcessor = false;
+    this._shaderAppliedBeforeProcessor = false;
 
     // Render options (3 independent settings)
     this.symbols = 'block';  // block, half, ascii, ascii+block, solid, stipple, quad, sextant, octant, braille
@@ -78,6 +87,9 @@ export class VideoOutput {
         opengl: this.opengl,
       });
       this.sdlRenderer.init(this.initWidth || 256, this.initHeight || 224);
+      this.sdlRenderer.getWindow()?.on('resize', (event) => {
+        this.onDisplayChange?.(event.pixelWidth, event.pixelHeight);
+      });
 
       // GL presentation rides on the SDL window. If the context or the preset
       // fails, say so and keep the CPU blit — a bad shader must not cost the
@@ -117,11 +129,12 @@ export class VideoOutput {
    * buffer, and presentation must never be the thing that produces it.
    */
   _present(rgbaData, width, height) {
-    if (this.glRenderer) {
+    if (this.glRenderer && this.frameProcessorEffectScope !== 'none'
+      && !this._shaderAppliedBeforeProcessor) {
       this.glRenderer.render(rgbaData, width, height);
       return;
     }
-    if (this.filter && this.filter !== 'none') {
+    if (!this._filterAppliedBeforeProcessor && this.filter && this.filter !== 'none') {
       const f = applyFilter(rgbaData, width, height, this.filter, this._filterBuf);
       this._filterBuf = f.pixels;
       this.sdlRenderer.render(f.pixels, f.width, f.height);
@@ -216,6 +229,62 @@ export class VideoOutput {
     this.dither = !!enabled;
   }
 
+  setFrameProcessor(processor, { effectScope = 'scene' } = {}) {
+    this.frameProcessor = typeof processor === 'function' ? processor : null;
+    this.frameProcessorEffectScope = ['none', 'game', 'scene', 'composite'].includes(effectScope)
+      ? effectScope : 'scene';
+  }
+
+  _processFrame(rgba, width, height) {
+    if (!this.frameProcessor) return { rgba, width, height };
+    this._filterAppliedBeforeProcessor = false;
+    this._shaderAppliedBeforeProcessor = false;
+    if (this.frameProcessorEffectScope === 'none') this._filterAppliedBeforeProcessor = true;
+    // A game-scoped filter or shader modifies only the core picture before the
+    // bezel places it. Scene/composite effects run over the completed 16:9
+    // frame below. GPU presets use the chain's offscreen target for both.
+    if (this.frameProcessorEffectScope === 'game') {
+      if (this.glRenderer) {
+        const filtered = this.glRenderer.filterFrame(rgba, width, height);
+        rgba = filtered.pixels;
+        width = filtered.width;
+        height = filtered.height;
+        this._shaderAppliedBeforeProcessor = true;
+      } else if (this.filter && this.filter !== 'none') {
+        const filtered = applyFilter(rgba, width, height, this.filter, this._gameFilterBuf);
+        this._gameFilterBuf = filtered.pixels;
+        rgba = filtered.pixels;
+        width = filtered.width;
+        height = filtered.height;
+        this._filterAppliedBeforeProcessor = true;
+      }
+    }
+    let result = this.frameProcessor(rgba, width, height, this.frameCount);
+    if (!result?.rgba || !result.width || !result.height) result = { rgba, width, height };
+
+    // For an Active Bezel, scene/composite effects are part of the authored
+    // final frame, not presentation-only decoration. Produce those pixels now
+    // so SDL, screenshots, recordings and remote play all receive one
+    // authoritative result. Ordinary non-bezel shader presentation retains
+    // its existing zero-readback path because frameProcessor is null there.
+    if (this.frameProcessorEffectScope === 'scene'
+      || this.frameProcessorEffectScope === 'composite') {
+      if (this.glRenderer) {
+        const filtered = this.glRenderer.filterFrame(result.rgba, result.width, result.height);
+        result = { rgba: filtered.pixels, width: filtered.width, height: filtered.height };
+        this._shaderAppliedBeforeProcessor = true;
+      } else if (this.filter && this.filter !== 'none') {
+        const filtered = applyFilter(
+          result.rgba, result.width, result.height, this.filter, this._filterBuf,
+        );
+        this._filterBuf = filtered.pixels;
+        result = { rgba: filtered.pixels, width: filtered.width, height: filtered.height };
+        this._filterAppliedBeforeProcessor = true;
+      }
+    }
+    return result;
+  }
+
   onFrame(wasmModule, dataPtr, width, height, pitch, pixelFormat) {
     this.frameCount++;
 
@@ -232,7 +301,8 @@ export class VideoOutput {
     if (!useSDL && (skipTerminalFrame || terminalBusy)) return;
 
     // Convert to RGBA on main thread
-    const rgbaData = this._convertToRGBA(wasmModule, dataPtr, width, height, pitch, pixelFormat);
+    let rgbaData = this._convertToRGBA(wasmModule, dataPtr, width, height, pitch, pixelFormat);
+    ({ rgba: rgbaData, width, height } = this._processFrame(rgbaData, width, height));
 
     // SDL rendering (every frame for smoothness). The CRT/scanline filter
     // upscales 2x on its way to the texture; the terminal path and the frame
@@ -306,6 +376,8 @@ export class VideoOutput {
 
     if (!useSDL && (skipTerminalFrame || terminalBusy)) return;
 
+    ({ rgba: rgbaBuffer, width, height } = this._processFrame(rgbaBuffer, width, height));
+
     if (useSDL && this.sdlRenderer) {
       if (this.glRenderer) this.glRenderer.render(rgbaBuffer, width, height);
       else this.sdlRenderer.renderRaw(rgbaBuffer, width, height, 'rgba32');
@@ -371,7 +443,7 @@ export class VideoOutput {
     // SDL can render XRGB8888 directly as 'bgrx8888' — no pixel conversion
     // needed. The shader chain cannot take that shortcut: it uploads RGBA, so
     // when a shader is active we fall through to the conversion below.
-    if (useSDL && this.sdlRenderer && !useTerminal && !this.glRenderer) {
+    if (useSDL && this.sdlRenderer && !useTerminal && !this.glRenderer && !this.frameProcessor) {
       this.sdlRenderer.renderRaw(xrgbBuffer, width, height, 'argb8888');
       if (this.onFrameCallback) {
         this.onFrameCallback(xrgbBuffer, width, height);
@@ -391,6 +463,8 @@ export class VideoOutput {
       rgbaData[si + 2] = xrgbBuffer[si];     // B
       rgbaData[si + 3] = 255;                // A
     }
+
+    ({ rgba: rgbaData, width, height } = this._processFrame(rgbaData, width, height));
 
     if (useSDL && this.sdlRenderer) {
       this._present(rgbaData, width, height);

@@ -1,0 +1,25 @@
+{
+  "format": "active-bezel",
+  "formatVersion": 1,
+  "id": "org.romdeck.reference.adventure-map",
+  "name": "Adventure Living Map",
+  "version": "1.0.0",
+  "author": "Romdeck",
+  "entry": "main.wasm",
+  "runtime": {
+    "abi": "active-bezel-1",
+    "renderer": "gpu-command-v1",
+    "internalResolution": [640, 360],
+    "extensions": []
+  },
+  "games": [{
+    "platform": "atari2600",
+    "sha256": "b0326b45e5cab066b2d03f1e683708d82de3ffe60b2e968bf88c5494237f0a96"
+  }],
+  "requires": [{ "region": "system_ram", "minSize": 128 }],
+  "pictureEffect": "game",
+  "settings": [
+    { "key": "show_map", "label": "Living map", "type": "boolean", "default": true },
+    { "key": "show_objects", "label": "Objects", "type": "boolean", "default": true }
+  ]
+}

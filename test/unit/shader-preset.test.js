@@ -6,7 +6,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { parsePreset } from '../../src/video/shaders/preset.js';
+import { GLRenderer } from '../../src/video/GLRenderer.js';
 
 test('parses a minimal single-pass preset', () => {
   const p = parsePreset('shaders = 1\nshader0 = crt.glsl\n', '/presets');
@@ -91,4 +94,50 @@ test('#reference inheritance is refused by name, not ignored', () => {
     () => parsePreset('#reference "other.glslp"\nshaders = 1\nshader0 = a.glsl\n', '.'),
     /#reference|inheritance/,
   );
+});
+
+test('a preset can render offscreen for game-scoped Active Bezel effects', async (t) => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'retroemu-shader-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const shader = path.join(dir, 'invert.glsl');
+  const preset = path.join(dir, 'invert.glslp');
+  writeFileSync(preset, 'shaders = 1\nshader0 = invert.glsl\nfilter_linear0 = false\n');
+  writeFileSync(shader, `
+#if defined(VERTEX)
+in vec4 VertexCoord;
+in vec4 TexCoord;
+out vec2 texCoord;
+void main() {
+  gl_Position = VertexCoord;
+  texCoord = TexCoord.xy;
+}
+#elif defined(FRAGMENT)
+uniform sampler2D Texture;
+in vec2 texCoord;
+out vec4 FragColor;
+void main() {
+  vec4 c = texture(Texture, texCoord);
+  FragColor = vec4(1.0 - c.rgb, c.a);
+}
+#endif
+`);
+
+  const renderer = await GLRenderer.create({ presetPath: preset });
+  if (!renderer) {
+    t.skip('OpenGL ES context is unavailable on this machine');
+    return;
+  }
+  t.after(() => renderer.destroy());
+
+  const source = new Uint8Array([
+    10, 20, 30, 255, 40, 50, 60, 255,
+    70, 80, 90, 255, 100, 110, 120, 255,
+  ]);
+  const result = renderer.filterFrame(source, 2, 2);
+  assert.equal(result.width, 2);
+  assert.equal(result.height, 2);
+  assert.deepEqual([...result.pixels], [
+    245, 235, 225, 255, 215, 205, 195, 255,
+    185, 175, 165, 255, 155, 145, 135, 255,
+  ]);
 });

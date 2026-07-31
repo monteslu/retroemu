@@ -1,17 +1,21 @@
 {
   "name": "retroemu",
-  "version": "0.5.3",
+  "version": "0.6.0",
   "description": "Terminal retro game emulator using libretro WASM cores",
   "type": "module",
   "main": "index.js",
   "bin": {
-    "retroemu": "./bin/cli.js"
+    "retroemu": "./bin/cli.js",
+    "abtool": "./bin/active-bezel.js"
   },
   "files": [
     "bin/",
     "src/",
     "cores/",
     "system/",
+    "sdk/",
+    "docs/",
+    "examples/active-bezel/",
     "index.js"
   ],
   "keywords": [
@@ -35,6 +39,9 @@
   "scripts": {
     "build:cores": "./scripts/build-all-cores.sh",
     "build:core": "./scripts/build-core.sh",
+    "build:active-bezel-adventure": "./scripts/build-active-bezel-adventure.sh",
+    "build:active-bezel-examples": "node scripts/generate-active-bezel-diagnostic.mjs && npm run build:active-bezel-adventure && node scripts/generate-active-bezel-references.mjs",
+    "benchmark:active-bezel": "node scripts/benchmark-active-bezel.mjs",
     "test": "node --test test/unit/*.test.js",
     "lint": "eslint src/ bin/ index.js"
   },
@@ -66,7 +73,8 @@
     "rungame": "^0.14.1",
     "wasmcart": "^0.16.0",
     "webgl-node": "^1.2.0",
-    "yauzl": "^3.2.0"
+    "yauzl": "^3.2.0",
+    "active-bezel": "file:../active-bezels"
   },
   "devDependencies": {
     "eslint": "^9.38.0"

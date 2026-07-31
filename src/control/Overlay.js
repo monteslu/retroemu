@@ -14,13 +14,18 @@ import { rgbaToPng } from './png.js';
 const NAV_REPEAT_MS = 160;
 
 export class Overlay {
-  constructor({ getHost, videoOutput, inputManager, shutdown, romPath, saveDir }) {
+  constructor({
+    getHost, videoOutput, inputManager, shutdown, romPath, saveDir,
+    getActiveBezel = null, disableActiveBezel = null,
+  }) {
     this.getHost = getHost;
     this.videoOutput = videoOutput;
     this.inputManager = inputManager;
     this.shutdownFn = shutdown;
     this.romPath = romPath;
     this.saveDir = saveDir;
+    this.getActiveBezel = getActiveBezel;
+    this.disableActiveBezel = disableActiveBezel;
 
     this.open = false;
     this.selected = 0;
@@ -44,6 +49,13 @@ export class Overlay {
       { label: 'LOAD STATE', run: () => this._load() },
       { label: 'SCREENSHOT', run: () => this._screenshot() },
       { label: 'FULLSCREEN', run: () => this._fullscreen() },
+      ...(this.getActiveBezel?.() ? [{
+        label: 'DISABLE ACTIVE BEZEL',
+        run: () => {
+          this.disableActiveBezel?.();
+          this._flash('ACTIVE BEZEL DISABLED');
+        },
+      }] : []),
       { label: 'QUIT', run: () => this.shutdownFn() },
     ];
   }
