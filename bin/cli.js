@@ -10,6 +10,17 @@
 // SDL initializes twice (parent + child) and crashes silently on macOS. So we re-exec here,
 // before importing anything native, and only for jsgame (the sole system that needs the flag).
 
+// Deliver controller input even when the SDL window is unfocused. SDL2 drops
+// controller button PRESSES while the app lacks input focus (releases pass, so
+// no stuck buttons) unless this hint is on, and @kmamal/sdl never sets it.
+// Keyboard stays focus-gated by design (routes to the focused window; no hint
+// governs it). Must be set before @kmamal/sdl initializes, so it lives here in
+// the bootstrap: nothing native has imported yet, and the re-exec path spreads
+// process.env so the child inherits it. Respect an explicit override (e.g. =0).
+if (!process.env.SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS) {
+  process.env.SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS = '1';
+}
+
 const romArg = process.argv.slice(2).find((a) => !a.startsWith('-')) || '';
 const isJsGameRom = /\.jsg(ame)?$/i.test(romArg);
 const needsFlag = isJsGameRom
