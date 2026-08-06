@@ -6,6 +6,7 @@ import {
   RETRO_DEVICE_ANALOG,
   RETRO_DEVICE_INDEX_ANALOG_LEFT,
   RETRO_DEVICE_INDEX_ANALOG_RIGHT,
+  RETRO_DEVICE_INDEX_ANALOG_BUTTON,
   RETRO_DEVICE_ID_ANALOG_X,
   RETRO_DEVICE_ID_ANALOG_Y,
   JOYPAD_MASK,
@@ -188,7 +189,28 @@ export class InputManager {
     }
   }
 
+  /*
+   * The CORE-facing read: physical state with any one-frame Active Bezel
+   * override applied on the joypad word. The bezel itself reads through
+   * getPhysicalState below — it must see the real pad (a left/right swap
+   * that read its own output would re-swap every frame), while the game
+   * sees what pre_render decided.
+   */
   getState(port, device, index, id) {
+    if (device === RETRO_DEVICE_JOYPAD) {
+      const ov = this._overrides?.[port];
+      if (ov) {
+        const mask = this._effectiveMask(port, ov);
+        if (id === JOYPAD_MASK) return mask;
+        if (id < 0 || id >= 16) return 0;
+        return (mask >> id) & 1;
+      }
+    }
+    return this.getPhysicalState(port, device, index, id);
+  }
+
+  /** What the pad is REALLY doing, overrides ignored (the bezel's view). */
+  getPhysicalState(port, device, index, id) {
     // Try gamepad first, fall back to keyboard for port 0.
     // A remote guest's pad takes the port it was assigned.
     const gamepad = this._remotePads?.get(port) ?? this.currentGamepads[port];
@@ -210,6 +232,15 @@ export class InputManager {
     }
 
     if (device === RETRO_DEVICE_ANALOG && gamepad) {
+      // Trigger pressure: index BUTTON, id = the joypad id (L2/R2). W3C
+      // trigger buttons carry an analog .value; scale to libretro's 0..32767.
+      if (index === RETRO_DEVICE_INDEX_ANALOG_BUTTON) {
+        const w3cIndex = LIBRETRO_TO_W3C[id];
+        const value = (w3cIndex >= 0 && w3cIndex < gamepad.buttons.length)
+          ? (gamepad.buttons[w3cIndex]?.value ?? 0)
+          : 0;
+        return Math.round(Math.max(0, Math.min(1, value)) * 32767);
+      }
       // Analog stick input
       // index: LEFT=0, RIGHT=1
       // id: X=0, Y=1
@@ -228,6 +259,44 @@ export class InputManager {
     }
 
     return 0;
+  }
+
+  /*
+   * One-frame input overrides (the Active Bezel pre_render path). `full`
+   * replaces the whole joypad word (the id-256 form); `set`/`clear` are
+   * per-button edits on top of the LIVE physical state, so overriding one
+   * button leaves the rest of the pad real. Cleared before every frame by
+   * the host loop; a bezel re-asserts each frame it still wants one.
+   */
+  setOverride(port, device, index, id, value) {
+    if (device !== RETRO_DEVICE_JOYPAD) return false; // joypad only, like romdev
+    if (!Number.isInteger(port) || port < 0 || port > 7) return false;
+    this._overrides ??= [];
+    const ov = this._overrides[port] ?? (this._overrides[port] = { full: null, set: 0, clear: 0 });
+    if (id === JOYPAD_MASK) {
+      ov.full = value & 0xffff;
+      ov.set = 0;
+      ov.clear = 0;
+      return true;
+    }
+    if (id < 0 || id >= 16) return false;
+    const bit = 1 << id;
+    if (ov.full !== null) {
+      ov.full = value ? (ov.full | bit) : (ov.full & ~bit);
+      return true;
+    }
+    if (value) { ov.set |= bit; ov.clear &= ~bit; } else { ov.clear |= bit; ov.set &= ~bit; }
+    return true;
+  }
+
+  clearOverrides() {
+    if (this._overrides) this._overrides.length = 0;
+  }
+
+  _effectiveMask(port, ov) {
+    if (ov.full !== null) return ov.full;
+    const physical = this.getPhysicalState(port, RETRO_DEVICE_JOYPAD, 0, JOYPAD_MASK);
+    return (physical & ~ov.clear) | ov.set;
   }
 
   _getButtonState(gamepad, port, id) {

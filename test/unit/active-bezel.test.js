@@ -293,11 +293,23 @@ test('OpenGL command compositor matches CPU reference and releases resources', (
   assert.equal(gpu.gpuReady, false);
 });
 
-test('canonical region catalog uses stable unique ids and names', () => {
-  const ids = new Set(CORE_REGIONS.map((region) => region.id));
+test('canonical region catalog uses stable unique NAMES (some ids are shared by design)', () => {
+  // Ids 0x110-0x113 are deliberately shared between the NES redraw planes and
+  // the SNES oam/cgram/aram/fillram entries: both sets are baked into the
+  // COMPILED cores, only one core is ever loaded at a time, and renumbering
+  // the JS alone makes the host ask a core for ids it does not implement
+  // (verified upstream: SNES reads went empty). Names are the unique handle.
+  const SHARED_IDS = new Set([0x110, 0x111, 0x112, 0x113]);
   const names = new Set(CORE_REGIONS.map((region) => region.name));
-  assert.equal(ids.size, CORE_REGIONS.length);
-  assert.equal(names.size, CORE_REGIONS.length);
+  assert.equal(names.size, CORE_REGIONS.length, 'region names must be unique');
+  const seen = new Map();
+  for (const region of CORE_REGIONS) {
+    if (seen.has(region.id)) {
+      assert.ok(SHARED_IDS.has(region.id),
+        `id 0x${region.id.toString(16)} shared by ${seen.get(region.id)} and ${region.name} without being on the documented shared list`);
+    }
+    seen.set(region.id, region.name);
+  }
   assert.ok(names.has('nes_palette'));
   assert.ok(names.has('gb_vram'));
   assert.ok(names.has('gba_oam'));
@@ -308,13 +320,17 @@ test('machine-readable ABI schema covers the runtime contract', async () => {
   const abi = JSON.parse(await fs.readFile(
     path.resolve(here, '../../sdk/active-bezel/abi.json'), 'utf8',
   ));
-  assert.equal(abi.version, 1);
+  assert.equal(abi.version, 2);
   for (const name of ['ab_abi_version', 'ab_init', 'ab_tick']) {
     assert.equal(abi.guestExports[name].required, true);
   }
+  /* ABI 2 additions stay OPTIONAL: a version-1 guest must keep loading. */
+  for (const name of ['ab_pre_render', 'ab_pre_render_defined']) {
+    assert.equal(abi.guestExports[name].required, false, `${name} must be optional`);
+  }
   for (const name of [
-    'input_state', 'region_generation', 'region_read_u8', 'region_write_u8',
-    'command_draw_game', 'command_draw_texture',
+    'input_state', 'input_override', 'region_generation', 'region_read_u8',
+    'region_write_u8', 'command_draw_game', 'command_draw_texture',
   ]) assert.ok(abi.hostImports[name], `ABI import ${name}`);
 });
 

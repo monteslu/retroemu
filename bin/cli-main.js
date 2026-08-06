@@ -602,7 +602,18 @@ async function loadActiveBezel() {
     platform: system.system,
     config: activeBezel?.config?.values ?? activeBezelConfig,
     force: activeBezelForce,
-    inputManager,
+    /*
+     * The bezel's input view is the PHYSICAL pad, never the overridden one:
+     * the core polls InputManager.getState (override applied), while a
+     * pre_render swap that read its own output back would re-swap every
+     * frame. setOverride/clearOverrides route to the same manager the core
+     * reads, which is what makes an override real.
+     */
+    inputManager: {
+      getState: (p, d, i, id) => inputManager.getPhysicalState(p, d, i, id),
+      setOverride: (p, d, i, id, v) => inputManager.setOverride(p, d, i, id, v),
+      clearOverrides: () => inputManager.clearOverrides(),
+    },
     allowGpu: !needsGL,
     outputWidth: preferredWidth || 1920,
     outputHeight: preferredHeight || 1080,
@@ -610,6 +621,10 @@ async function loadActiveBezel() {
   const previous = activeBezel;
   if (!previous) activeBezelNormalAspect = videoOutput.displayAspectRatio;
   activeBezel = next;
+  // ABI-2 pre_render: run the guest hook before every core frame. Installed
+  // unconditionally (an ASSETS_RELOADED reboot can add the hook later);
+  // preFrame early-returns when the script defines none.
+  host.beforeFrame = (n) => activeBezel?.preFrame?.(n);
   videoOutput.setAspectRatio(16 / 9);
   videoOutput.setFrameProcessor(
     (rgba, width, height, frame) => activeBezel.processFrame(rgba, width, height, frame),
@@ -623,6 +638,10 @@ async function loadActiveBezel() {
 function disableActiveBezel() {
   activeBezel?.shutdown();
   activeBezel = null;
+  // Unhook pre_render and drop any override staged for the next frame — a
+  // disabled bezel must stop shaping the game immediately.
+  host.beforeFrame = null;
+  inputManager.clearOverrides?.();
   videoOutput.setFrameProcessor(null);
   if (activeBezelNormalAspect) videoOutput.setAspectRatio(activeBezelNormalAspect);
   activeBezelNormalAspect = null;

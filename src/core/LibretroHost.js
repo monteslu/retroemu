@@ -855,6 +855,20 @@ export class LibretroHost {
 
       if (uncapped || elapsed >= frameDurationMs) {
         lastFrameTime = uncapped ? now : now - (elapsed % frameDurationMs);
+        // Pre-frame contract (Active Bezel pre_render): last frame's input
+        // overrides clear, then the hook may write core memory / re-assert
+        // overrides for the frame about to run. Numbered _frameCount+1 so it
+        // names the same frame the post-run processFrame observes. A hook
+        // failure never kills the loop (same policy as onFrameHook below).
+        this.inputManager.clearOverrides?.();
+        if (this.beforeFrame) {
+          try { this.beforeFrame(this._frameCount + 1); } catch (err) {
+            if (!this._beforeFrameErrorLogged) {
+              this._beforeFrameErrorLogged = true;
+              console.error(`beforeFrame hook threw (further errors suppressed): ${err?.stack ?? err}`);
+            }
+          }
+        }
         this.core._retro_run();
         this._frameCount++;
 

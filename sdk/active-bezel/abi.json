@@ -1,54 +1,514 @@
 {
   "name": "active-bezel",
-  "version": 1,
-  "logicalCanvas": [1920, 1080],
-  "renderers": ["cpu-rgba-v1", "gpu-command-v1"],
+  "version": 2,
+  "logicalCanvas": [
+    1920,
+    1080
+  ],
+  "renderers": [
+    "cpu-rgba-v1",
+    "gpu-command-v1"
+  ],
   "guestExports": {
-    "ab_abi_version": {"params": [], "result": "i32", "required": true},
-    "ab_init": {"params": ["i32"], "result": "i32", "required": true},
-    "ab_tick": {"params": ["i64"], "result": null, "required": true},
-    "ab_event": {"params": ["i32", "i32"], "result": null, "required": false},
-    "ab_shutdown": {"params": [], "result": null, "required": false},
-    "ab_framebuffer_ptr": {"params": [], "result": "i32", "required": false},
-    "ab_framebuffer_width": {"params": [], "result": "i32", "required": false},
-    "ab_framebuffer_height": {"params": [], "result": "i32", "required": false}
+    "ab_abi_version": {
+      "params": [],
+      "result": "i32",
+      "required": true
+    },
+    "ab_init": {
+      "params": [
+        "i32"
+      ],
+      "result": "i32",
+      "required": true
+    },
+    "ab_tick": {
+      "params": [
+        "i64"
+      ],
+      "result": null,
+      "required": true
+    },
+    "ab_pre_render": {
+      "params": [
+        "i64"
+      ],
+      "result": "i32",
+      "required": false
+    },
+    "ab_pre_render_defined": {
+      "params": [],
+      "result": "i32",
+      "required": false
+    },
+    "ab_event": {
+      "params": [
+        "i32",
+        "i32"
+      ],
+      "result": null,
+      "required": false
+    },
+    "ab_shutdown": {
+      "params": [],
+      "result": null,
+      "required": false
+    },
+    "ab_framebuffer_ptr": {
+      "params": [],
+      "result": "i32",
+      "required": false
+    },
+    "ab_framebuffer_width": {
+      "params": [],
+      "result": "i32",
+      "required": false
+    },
+    "ab_framebuffer_height": {
+      "params": [],
+      "result": "i32",
+      "required": false
+    }
   },
   "hostImports": {
-    "abi_version": {"params": [], "result": "i32"},
-    "logical_width": {"params": [], "result": "i32"},
-    "logical_height": {"params": [], "result": "i32"},
-    "physical_width": {"params": [], "result": "i32"},
-    "physical_height": {"params": [], "result": "i32"},
-    "input_state": {"params": ["i32", "i32", "i32", "i32"], "result": "i32"},
-    "region_generation": {"params": [], "result": "i32"},
-    "region_count": {"params": [], "result": "i32"},
-    "region_name_length": {"params": ["i32"], "result": "i32"},
-    "region_name_read": {"params": ["i32", "i32", "i32"], "result": "i32"},
-    "region_find": {"params": ["i32", "i32"], "result": "i32"},
-    "region_find_id": {"params": ["i32"], "result": "i32"},
-    "region_size": {"params": ["i32"], "result": "i32"},
-    "region_flags": {"params": ["i32"], "result": "i32"},
-    "region_offset": {"params": ["i32"], "result": "i32"},
-    "region_read_u8": {"params": ["i32", "i32"], "result": "i32"},
-    "region_write_u8": {"params": ["i32", "i32", "i32"], "result": "i32"},
-    "config_bool": {"params": ["i32", "i32"], "result": "i32"},
-    "config_number": {"params": ["i32", "i32"], "result": "f64"},
-    "config_string_length": {"params": ["i32", "i32"], "result": "i32"},
-    "config_string_read": {"params": ["i32", "i32", "i32", "i32"], "result": "i32"},
-    "asset_size": {"params": ["i32", "i32"], "result": "i32"},
-    "asset_read": {"params": ["i32", "i32", "i32", "i32"], "result": "i32"},
-    "command_clear": {"params": ["i32"], "result": null},
-    "command_draw_game": {"params": ["f64", "f64", "f64", "f64", "i32"], "result": null},
-    "command_draw_game_fit": {"params": ["i32", "f64", "f64", "i32"], "result": null},
-    "command_fill_rect": {"params": ["f64", "f64", "f64", "f64", "i32"], "result": null},
-    "command_triangle": {"params": ["f64", "f64", "f64", "f64", "f64", "f64", "i32"], "result": null},
-    "command_text": {"params": ["i32", "i32", "f64", "f64", "f64", "i32"], "result": null},
-    "command_scissor": {"params": ["f64", "f64", "f64", "f64"], "result": null},
-    "command_scissor_reset": {"params": [], "result": null},
-    "texture_create_rgba": {"params": ["i32", "i32", "i32"], "result": "i32"},
-    "texture_destroy": {"params": ["i32"], "result": "i32"},
-    "command_draw_texture": {"params": ["i32", "f64", "f64", "f64", "f64"], "result": "i32"},
-    "log": {"params": ["i32", "i32"], "result": null}
+    "abi_version": {
+      "params": [],
+      "result": "i32"
+    },
+    "logical_width": {
+      "params": [],
+      "result": "i32"
+    },
+    "logical_height": {
+      "params": [],
+      "result": "i32"
+    },
+    "physical_width": {
+      "params": [],
+      "result": "i32"
+    },
+    "physical_height": {
+      "params": [],
+      "result": "i32"
+    },
+    "input_state": {
+      "params": [
+        "i32",
+        "i32",
+        "i32",
+        "i32"
+      ],
+      "result": "i32"
+    },
+    "input_override": {
+      "params": [
+        "i32",
+        "i32",
+        "i32",
+        "i32",
+        "i32"
+      ],
+      "result": "i32"
+    },
+    "region_generation": {
+      "params": [],
+      "result": "i32"
+    },
+    "region_count": {
+      "params": [],
+      "result": "i32"
+    },
+    "region_name_length": {
+      "params": [
+        "i32"
+      ],
+      "result": "i32"
+    },
+    "region_name_read": {
+      "params": [
+        "i32",
+        "i32",
+        "i32"
+      ],
+      "result": "i32"
+    },
+    "region_find": {
+      "params": [
+        "i32",
+        "i32"
+      ],
+      "result": "i32"
+    },
+    "region_find_id": {
+      "params": [
+        "i32"
+      ],
+      "result": "i32"
+    },
+    "region_size": {
+      "params": [
+        "i32"
+      ],
+      "result": "i32"
+    },
+    "region_flags": {
+      "params": [
+        "i32"
+      ],
+      "result": "i32"
+    },
+    "region_offset": {
+      "params": [
+        "i32"
+      ],
+      "result": "i32"
+    },
+    "region_read_u8": {
+      "params": [
+        "i32",
+        "i32"
+      ],
+      "result": "i32"
+    },
+    "region_read": {
+      "params": [
+        "i32",
+        "i32",
+        "i32",
+        "i32"
+      ],
+      "result": "i32"
+    },
+    "region_write_u8": {
+      "params": [
+        "i32",
+        "i32",
+        "i32"
+      ],
+      "result": "i32"
+    },
+    "config_bool": {
+      "params": [
+        "i32",
+        "i32"
+      ],
+      "result": "i32"
+    },
+    "config_number": {
+      "params": [
+        "i32",
+        "i32"
+      ],
+      "result": "f64"
+    },
+    "config_string_length": {
+      "params": [
+        "i32",
+        "i32"
+      ],
+      "result": "i32"
+    },
+    "config_string_read": {
+      "params": [
+        "i32",
+        "i32",
+        "i32",
+        "i32"
+      ],
+      "result": "i32"
+    },
+    "asset_size": {
+      "params": [
+        "i32",
+        "i32"
+      ],
+      "result": "i32"
+    },
+    "asset_read": {
+      "params": [
+        "i32",
+        "i32",
+        "i32",
+        "i32"
+      ],
+      "result": "i32"
+    },
+    "command_clear": {
+      "params": [
+        "i32"
+      ],
+      "result": null
+    },
+    "command_draw_game": {
+      "params": [
+        "f64",
+        "f64",
+        "f64",
+        "f64",
+        "i32"
+      ],
+      "result": null
+    },
+    "command_draw_game_fit": {
+      "params": [
+        "i32",
+        "f64",
+        "f64",
+        "i32"
+      ],
+      "result": null
+    },
+    "command_fill_rect": {
+      "params": [
+        "f64",
+        "f64",
+        "f64",
+        "f64",
+        "i32"
+      ],
+      "result": null
+    },
+    "command_triangle": {
+      "params": [
+        "f64",
+        "f64",
+        "f64",
+        "f64",
+        "f64",
+        "f64",
+        "i32"
+      ],
+      "result": null
+    },
+    "command_text": {
+      "params": [
+        "i32",
+        "i32",
+        "f64",
+        "f64",
+        "f64",
+        "i32"
+      ],
+      "result": null
+    },
+    "command_scissor": {
+      "params": [
+        "f64",
+        "f64",
+        "f64",
+        "f64"
+      ],
+      "result": null
+    },
+    "command_scissor_reset": {
+      "params": [],
+      "result": null
+    },
+    "texture_create_rgba": {
+      "params": [
+        "i32",
+        "i32",
+        "i32"
+      ],
+      "result": "i32"
+    },
+    "texture_destroy": {
+      "params": [
+        "i32"
+      ],
+      "result": "i32"
+    },
+    "texture_filter": {
+      "params": [
+        "i32",
+        "i32"
+      ],
+      "result": "i32"
+    },
+    "texture_palette": {
+      "params": [
+        "i32",
+        "i32"
+      ],
+      "result": "i32"
+    },
+    "texture_update": {
+      "params": [
+        "i32",
+        "i32",
+        "i32",
+        "i32",
+        "i32",
+        "i32"
+      ],
+      "result": "i32"
+    },
+    "command_draw_texture": {
+      "params": [
+        "i32",
+        "f64",
+        "f64",
+        "f64",
+        "f64"
+      ],
+      "result": "i32"
+    },
+    "log": {
+      "params": [
+        "i32",
+        "i32"
+      ],
+      "result": null
+    },
+    "command_draw_texture_rect": {
+      "params": [
+        "i32",
+        "f64",
+        "f64",
+        "f64",
+        "f64",
+        "i32",
+        "i32",
+        "i32",
+        "i32"
+      ],
+      "result": "i32"
+    },
+    "game_width": {
+      "params": [],
+      "result": "i32"
+    },
+    "game_height": {
+      "params": [],
+      "result": "i32"
+    },
+    "game_pixel": {
+      "params": [
+        "i32",
+        "i32"
+      ],
+      "result": "i32"
+    },
+    "command_push_transform": {
+      "params": [],
+      "result": "i32"
+    },
+    "command_pop_transform": {
+      "params": [],
+      "result": "i32"
+    },
+    "command_reset_transform": {
+      "params": [],
+      "result": null
+    },
+    "command_translate": {
+      "params": [
+        "f64",
+        "f64"
+      ],
+      "result": null
+    },
+    "command_scale": {
+      "params": [
+        "f64",
+        "f64"
+      ],
+      "result": null
+    },
+    "command_rotate": {
+      "params": [
+        "f64"
+      ],
+      "result": null
+    },
+    "command_mesh": {
+      "params": [
+        "i32",
+        "i32",
+        "i32"
+      ],
+      "result": "i32"
+    },
+    "time_elapsed_ms": {
+      "params": [],
+      "result": "f64"
+    },
+    "time_delta_ms": {
+      "params": [],
+      "result": "f64"
+    },
+    "effect_set": {
+      "params": [
+        "i32",
+        "i32"
+      ],
+      "result": "i32"
+    },
+    "effect_clear": {
+      "params": [],
+      "result": "i32"
+    },
+    "command_skew": {
+      "params": [
+        "f64",
+        "f64"
+      ],
+      "result": null
+    },
+    "command_transform2d": {
+      "params": [
+        "f64",
+        "f64",
+        "f64",
+        "f64",
+        "f64",
+        "f64"
+      ],
+      "result": null
+    },
+    "command_quad": {
+      "params": [
+        "i32",
+        "i32",
+        "i32"
+      ],
+      "result": "i32"
+    },
+    "surface_create": {
+      "params": [
+        "i32",
+        "i32"
+      ],
+      "result": "i32"
+    },
+    "surface_target": {
+      "params": [
+        "i32"
+      ],
+      "result": "i32"
+    },
+    "surface_end": {
+      "params": [],
+      "result": "i32"
+    },
+    "surface_filter": {
+      "params": [
+        "i32",
+        "i32",
+        "i32",
+        "i32"
+      ],
+      "result": "i32"
+    },
+    "surface_preset": {
+      "params": [
+        "i32",
+        "i32",
+        "i32",
+        "i32"
+      ],
+      "result": "i32"
+    }
   },
   "events": {
     "reset": 1,
@@ -59,7 +519,20 @@
     "assetsReloaded": 6,
     "regionsChanged": 7
   },
-  "regionFlags": {"read": 1, "write": 2, "volatile": 4, "rom": 8},
-  "fitModes": {"contain": 0, "cover": 1, "stretch": 2, "integer": 3},
-  "sampling": {"nearest": 0, "linear": 1}
+  "regionFlags": {
+    "read": 1,
+    "write": 2,
+    "volatile": 4,
+    "rom": 8
+  },
+  "fitModes": {
+    "contain": 0,
+    "cover": 1,
+    "stretch": 2,
+    "integer": 3
+  },
+  "sampling": {
+    "nearest": 0,
+    "linear": 1
+  }
 }
