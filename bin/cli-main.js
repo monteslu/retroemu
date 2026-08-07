@@ -615,7 +615,7 @@ async function loadActiveBezel() {
     /*
      * The bezel's input view is the PHYSICAL pad, never the overridden one:
      * the core polls InputManager.getState (override applied), while a
-     * pre_render swap that read its own output back would re-swap every
+     * pre_frame swap that read its own output back would re-swap every
      * frame. setOverride/clearOverrides route to the same manager the core
      * reads, which is what makes an override real.
      */
@@ -631,7 +631,7 @@ async function loadActiveBezel() {
   const previous = activeBezel;
   if (!previous) activeBezelNormalAspect = videoOutput.displayAspectRatio;
   activeBezel = next;
-  // ABI-2 pre_render: run the guest hook before every core frame. Installed
+  // ABI-2 pre_frame: run the guest hook before every core frame. Installed
   // unconditionally (an ASSETS_RELOADED reboot can add the hook later);
   // preFrame early-returns when the script defines none.
   host.beforeFrame = (n) => activeBezel?.preFrame?.(n);
@@ -648,7 +648,7 @@ async function loadActiveBezel() {
 function disableActiveBezel() {
   activeBezel?.shutdown();
   activeBezel = null;
-  // Unhook pre_render and drop any override staged for the next frame — a
+  // Unhook pre_frame and drop any override staged for the next frame — a
   // disabled bezel must stop shaping the game immediately.
   host.beforeFrame = null;
   inputManager.clearOverrides?.();

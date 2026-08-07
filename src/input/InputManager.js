@@ -194,7 +194,7 @@ export class InputManager {
    * override applied on the joypad word. The bezel itself reads through
    * getPhysicalState below — it must see the real pad (a left/right swap
    * that read its own output would re-swap every frame), while the game
-   * sees what pre_render decided.
+   * sees what pre_frame decided.
    */
   getState(port, device, index, id) {
     if (device === RETRO_DEVICE_JOYPAD) {
@@ -262,7 +262,7 @@ export class InputManager {
   }
 
   /*
-   * One-frame input overrides (the Active Bezel pre_render path). `full`
+   * One-frame input overrides (the Active Bezel pre_frame path). `full`
    * replaces the whole joypad word (the id-256 form); `set`/`clear` are
    * per-button edits on top of the LIVE physical state, so overriding one
    * button leaves the rest of the pad real. Cleared before every frame by

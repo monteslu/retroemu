@@ -111,7 +111,14 @@ int32_t ab_init(uint32_t descriptor);
 void ab_tick(uint64_t frame);
 ```
 
-Optional exports are `ab_event`, `ab_shutdown`, and the CPU framebuffer trio.
+Optional exports are `ab_event`, `ab_shutdown`, the CPU framebuffer trio, and
+(ABI 2, active-bezel 0.8.0+) `ab_pre_frame` — called BEFORE every core frame,
+where a guest may write live regions and stage `input_override` for what the
+core is polled with that frame. Overrides clear every frame; input reads keep
+reporting the physical pad so a remap cannot feed back on itself. retroemu
+runs the hook on its per-frame choke point (`host.beforeFrame`), so no frame
+driver skips it. A guest that uses ABI 2 imports fail loudly (LinkError) on
+pre-0.8.0 hosts by design; ABI 1 guests run unchanged.
 Lifecycle events cover reset, state load, rewind jump, live configuration,
 display change, asset reload, and region relocation.
 

@@ -860,7 +860,7 @@ export class LibretroHost {
 
       if (uncapped || elapsed >= frameDurationMs) {
         lastFrameTime = uncapped ? now : now - (elapsed % frameDurationMs);
-        // Pre-frame contract (Active Bezel pre_render): last frame's input
+        // Pre-frame contract (Active Bezel pre_frame): last frame's input
         // overrides clear, then the hook may write core memory / re-assert
         // overrides for the frame about to run. Numbered _frameCount+1 so it
         // names the same frame the post-run processFrame observes. A hook
