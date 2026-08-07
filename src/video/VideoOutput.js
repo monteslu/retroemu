@@ -7,6 +7,7 @@ import {
   RETRO_PIXEL_FORMAT_RGB565,
 } from '../constants/libretro.js';
 import { SDLRenderer } from './SDLRenderer.js';
+import { displayAspectFor } from './aspect.js';
 import { applyFilter, isFilter } from './filters.js';
 
 // Pre-computed lookup tables for RGB565 → RGB8 conversion
@@ -26,11 +27,14 @@ export class VideoOutput {
     this.renderEveryN = 2; // Render every Nth frame to terminal
     this.rgbaBuffer = null;
     this.pendingFrame = false;
-    this.displayAspectRatio = 4 / 3; // Default to 4:3, can be set by core
     this.contrast = 1.0; // 1.0 = no change, >1 = more contrast
 
     // Video output mode: 'terminal' | 'sdl' | 'both'
     this.mode = options.video || 'terminal';
+    // Presentation policy: 'tv' (physical output medium — 4:3 CRT for
+    // consoles, the LCD's own shape for handhelds) | 'native' (square
+    // pixels) | 'core' (core-reported). See src/video/aspect.js.
+    this.aspectMode = options.aspectMode || 'tv';
     this.sdlScale = options.scale || 2;
     this.sdlAccelerated = options.accelerated !== false; // default true
     this.sdlRenderer = null;
@@ -38,6 +42,14 @@ export class VideoOutput {
     this.initHeight = options.initHeight || 0;
     this.fullscreen = !!options.fullscreen;
     this.opengl = !!options.opengl;
+    // The system id (SystemDetector), when the caller already knows it —
+    // lets the window OPEN at the right shape instead of snapping to it
+    // after the core loads. Refined by setAspectFromCore either way.
+    this.system = options.system || null;
+    this.displayAspectRatio = displayAspectFor(
+      this.aspectMode, this.system,
+      this.initWidth || 256, this.initHeight || 224,
+    );
 
     // --shader <preset.glslp>: GPU shader chain. Mutually exclusive with the
     // CPU --video-filter, the same way RetroArch treats them (they are
@@ -85,6 +97,10 @@ export class VideoOutput {
         accelerated: this.sdlAccelerated,
         fullscreen: this.fullscreen,
         opengl: this.opengl,
+        // Open at the presentation shape, not the pixel grid's — the exact
+        // aspect (core-informed) lands via setAspectRatio once the core's AV
+        // info is read, which auto-fits the window if it changed.
+        aspect: this.aspectMode === 'native' ? null : this.displayAspectRatio,
       });
       this.sdlRenderer.init(this.initWidth || 256, this.initHeight || 224);
       this.sdlRenderer.getWindow()?.on('resize', (event) => {
@@ -192,6 +208,31 @@ export class VideoOutput {
 
   setAspectRatio(ratio) {
     this.displayAspectRatio = ratio > 0 ? ratio : 4 / 3;
+    // Presentation renderers letterbox to this ratio (the terminal path
+    // reads displayAspectRatio directly each frame).
+    this.sdlRenderer?.setAspect(this.displayAspectRatio);
+    this.glRenderer?.setAspect(this.displayAspectRatio);
+  }
+
+  /**
+   * Set the presentation aspect from what the core reported, filtered
+   * through the user's aspect policy ('tv' | 'native' | 'core').
+   * Called by LibretroHost once AV info is known.
+   */
+  setAspectFromCore(system, fbWidth, fbHeight, coreAspect) {
+    if (system) this.system = system;
+    if (this.aspectMode === 'native') {
+      // Square pixels, live: a null renderer aspect tracks the framebuffer
+      // ratio even when the core changes resolution mid-game (PSX mode
+      // switches), where a pinned ratio would go stale.
+      if (fbWidth > 0 && fbHeight > 0) this.displayAspectRatio = fbWidth / fbHeight;
+      this.sdlRenderer?.setAspect(null);
+      this.glRenderer?.setAspect(null);
+      return;
+    }
+    this.setAspectRatio(displayAspectFor(
+      this.aspectMode, this.system, fbWidth, fbHeight, coreAspect,
+    ));
   }
 
   resizeWindow(width, height) {

@@ -9,10 +9,58 @@ export class SDLRenderer {
     this.accelerated = options.accelerated !== false; // default true
     this.fullscreen = !!options.fullscreen;
     this.opengl = !!options.opengl;
+    // Presentation aspect (width/height). null = the framebuffer's own ratio
+    // (square pixels). Consoles authored for a 4:3 CRT set this so the
+    // picture is the shape the game was designed for, not the pixel grid's.
+    this.aspect = options.aspect > 0 ? options.aspect : null;
     this.width = 0;
     this.height = 0;
     this.initialized = false;
     this.windowRatio = 1;
+    this._userResized = false;
+  }
+
+  // The window size that presents a width x height source at this.aspect
+  // with integer-ish scale: height drives, width follows the aspect.
+  _idealSize(width, height) {
+    const h = Math.max(1, Math.round(height * this.scale));
+    const ratio = this.aspect > 0 ? this.aspect : width / height;
+    return { w: Math.max(1, Math.round(h * ratio)), h };
+  }
+
+  // Re-fit the window to the current source + aspect, unless the user has
+  // taken over the window size (their resize wins until the next explicit
+  // resizeWindow call) or we're fullscreen (size is the display's).
+  // _setW/_setH are the LOGICAL size we last asked for (setSize units);
+  // _autoW/_autoH are the PIXEL size that produced (resize events report
+  // pixels, and on hi-dpi the two differ — comparing across units would
+  // misread every programmatic resize as the user's).
+  _autoFit() {
+    if (!this.window || this.fullscreen || this._userResized) return;
+    const { w, h } = this._idealSize(this.width, this.height);
+    if (w === this._setW && h === this._setH) return;
+    this._setW = w;
+    this._setH = h;
+    this.window.setSize(w, h);
+    this._syncCachedSize();
+  }
+
+  _syncCachedSize() {
+    this._autoW = this.window.pixelWidth;
+    this._autoH = this.window.pixelHeight;
+    this.cachedWidth = this.window.pixelWidth;
+    this.cachedHeight = this.window.pixelHeight;
+    this.windowRatio = this.cachedWidth / this.cachedHeight;
+  }
+
+  /**
+   * Set the presentation aspect ratio (width/height; 0/null = framebuffer
+   * ratio). Takes effect on the next frame; snaps the window to the new
+   * shape unless the user has resized it themselves.
+   */
+  setAspect(ratio) {
+    this.aspect = ratio > 0 ? ratio : null;
+    this._autoFit();
   }
 
   init(width, height) {
@@ -25,13 +73,16 @@ export class SDLRenderer {
       return mouse.x >= x && mouse.x < x + w && mouse.y >= y && mouse.y < y + h;
     }) || sdl.video.displays[0];
 
+    const { w: initW, h: initH } = this._idealSize(width, height);
+    this._setW = initW;
+    this._setH = initH;
     this.window = sdl.video.createWindow({
       title: this.title,
       // Multi-monitor desktops should open the game where the user currently
       // is, not whichever output SDL happens to enumerate first.
       display: activeDisplay,
-      width: width * this.scale,
-      height: height * this.scale,
+      width: initW,
+      height: initH,
       resizable: true,
       vsync: false,
       accelerated: this.accelerated,
@@ -45,17 +96,20 @@ export class SDLRenderer {
       process.emit('SIGINT');
     });
 
-    // Update cached dimensions on resize - use event values
+    // Update cached dimensions on resize - use event values. A resize that
+    // doesn't match a size we set ourselves is the USER dragging the window:
+    // from then on their size wins and auto-fit stays hands-off.
     this.window.on('resize', (e) => {
       this.cachedWidth = e.pixelWidth;
       this.cachedHeight = e.pixelHeight;
       this.windowRatio = e.pixelWidth / e.pixelHeight;
+      if (e.pixelWidth !== this._autoW || e.pixelHeight !== this._autoH) {
+        this._userResized = true;
+      }
     });
 
     // Initial dimensions
-    this.cachedWidth = this.window.pixelWidth;
-    this.cachedHeight = this.window.pixelHeight;
-    this.windowRatio = this.cachedWidth / this.cachedHeight;
+    this._syncCachedSize();
 
     this.initialized = true;
   }
@@ -72,10 +126,12 @@ export class SDLRenderer {
   _renderPixels(pixelData, width, height, format) {
     if (!this.window || !this.initialized) return;
 
-    // Update source dimensions if changed
+    // Update source dimensions if changed (and re-fit the window shape —
+    // a core can change resolution mid-game, e.g. SNES hi-res screens)
     if (width !== this.width || height !== this.height) {
       this.width = width;
       this.height = height;
+      this._autoFit();
     }
 
     const pitch = width * 4;
@@ -89,8 +145,10 @@ export class SDLRenderer {
     this._fbBuf.set(pixelData);
     const buffer = this._fbBuf;
 
-    // Calculate draw rect for aspect ratio preservation
-    const canvasRatio = width / height;
+    // Calculate draw rect for aspect ratio preservation. Present at the
+    // display aspect (4:3 for TV consoles, the LCD shape for handhelds),
+    // not the framebuffer's pixel-grid ratio.
+    const canvasRatio = this.aspect > 0 ? this.aspect : width / height;
 
     let drawX, drawY, drawWidth, drawHeight;
 
@@ -129,12 +187,15 @@ export class SDLRenderer {
 
   resizeWindow(width, height) {
     if (!this.window) return;
-    this.window.setSize(width * this.scale, height * this.scale);
     this.width = width;
     this.height = height;
-    this.cachedWidth = this.window.pixelWidth;
-    this.cachedHeight = this.window.pixelHeight;
-    this.windowRatio = this.cachedWidth / this.cachedHeight;
+    // An explicit resize is a new baseline: auto-fit owns the window again.
+    this._userResized = false;
+    const { w, h } = this._idealSize(width, height);
+    this._setW = w;
+    this._setH = h;
+    this.window.setSize(w, h);
+    this._syncCachedSize();
   }
 
   setTitle(title) {

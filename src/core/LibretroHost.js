@@ -193,8 +193,13 @@ export class LibretroHost {
       process.env.RETROEMU_DEBUG && console.error(`[libretro] HW render active: ${w}x${h}`);
     }
 
-    // Set display aspect ratio for correct rendering
-    this.videoOutput.setAspectRatio(geometry.aspectRatio);
+    // Set the presentation aspect: the core-reported ratio filtered through
+    // the user's aspect policy (default 'tv' = the physical medium the
+    // system was built for — cores are not reliable here, e.g. several
+    // report the bare framebuffer ratio for 4:3 consoles).
+    this.videoOutput.setAspectFromCore(
+      system.system, geometry.baseWidth, geometry.baseHeight, geometry.aspectRatio,
+    );
 
     // Initialize audio with the core's sample rate
     await this.audioBridge.init(timing.sampleRate);

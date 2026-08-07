@@ -28,6 +28,14 @@ export class GLRenderer {
     this.warnings = [];
     this.frames = 0;
     this._contextOwned = false;
+    // Presentation aspect (width/height). null = framebuffer ratio. Kept in
+    // sync with SDLRenderer by VideoOutput.setAspectRatio.
+    this.aspect = null;
+  }
+
+  /** Set the presentation aspect ratio (0/null = framebuffer ratio). */
+  setAspect(ratio) {
+    this.aspect = ratio > 0 ? ratio : null;
   }
 
   /**
@@ -87,7 +95,7 @@ export class GLRenderer {
     // cost nothing. The chain's final pass draws into this rect.
     const w = this.window?.pixelWidth || width;
     const h = this.window?.pixelHeight || height;
-    const srcRatio = width / height;
+    const srcRatio = this.aspect > 0 ? this.aspect : width / height;
     let dw; let dh;
     if (w / h > srcRatio) { dh = h; dw = Math.round(h * srcRatio); } else { dw = w; dh = Math.round(w / srcRatio); }
     const viewport = {

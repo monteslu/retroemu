@@ -183,6 +183,12 @@ Options:
 
 Video output:
   --video <mode>       Output mode: terminal (default), sdl, both
+  --aspect <mode>      Picture shape (default: tv):
+                       tv     the physical display the system was built for —
+                              4:3 CRT for consoles, the LCD's own shape for
+                              handhelds (GB/GBA/Lynx pixels are square)
+                       native square pixels — scale the raw framebuffer
+                       core   whatever the emulator core reports
   --scale <n>          SDL window scale factor (default: 2)
 
 Terminal graphics options:

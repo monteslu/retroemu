@@ -8,6 +8,7 @@ import { AudioBridge } from '../src/audio/AudioBridge.js';
 import { InputManager } from '../src/input/InputManager.js';
 import { SaveManager } from '../src/core/SaveManager.js';
 import { detectSystem, getSupportedExtensions } from '../src/core/SystemDetector.js';
+import { parseAspectMode } from '../src/video/aspect.js';
 import { loadRom, isZipFile } from '../src/core/RomLoader.js';
 import { CartHost, BUTTON } from 'wasmcart';
 import { createHostSession as createJsGameSession } from 'rungame';
@@ -41,6 +42,7 @@ let debugInput = false;
 const DEBUG = !!process.env.RETROEMU_DEBUG || process.argv.includes('--debug');
 const dlog = (...a) => { if (DEBUG) console.error(...a); };
 let videoMode = 'terminal';  // terminal | sdl | both
+let aspectMode = 'tv';       // tv (physical medium) | native (square pixels) | core
 let sdlScale = 1;
 let preferredWidth = 0;   // 0 = no preference (cart chooses)
 let preferredHeight = 0;
@@ -96,6 +98,14 @@ for (let i = 0; i < args.length; i++) {
     const mode = args[++i];
     if (['terminal', 'sdl', 'both'].includes(mode)) {
       videoMode = mode;
+    }
+  } else if (args[i] === '--aspect' && args[i + 1]) {
+    const mode = parseAspectMode(args[++i]);
+    if (mode) {
+      aspectMode = mode;
+    } else {
+      console.error(`--aspect: expected tv, native, or core (got "${args[i]}")`);
+      process.exit(1);
     }
   } else if (args[i] === '--scale' && args[i + 1]) {
     sdlScale = parseInt(args[++i], 10) || 2;
@@ -336,7 +346,7 @@ if (isCart) {
 // Window surface GL carts: scale=1 since EGL surface matches native window pixels (not SDL scaled)
 const hwLibretroCores = ['mupen64plus_next', 'parallel_n64'];
 const needsGL = cartUsesGL || (system && hwLibretroCores.includes(system.core));
-const videoOutput = new VideoOutput({ video: videoMode, scale: glUseWindowSurface ? 1 : sdlScale, accelerated: !needsGL || glUseWindowSurface, initWidth: preferredWidth, initHeight: preferredHeight, fullscreen, opengl: glUseWindowSurface, shader: shaderPreset });
+const videoOutput = new VideoOutput({ video: videoMode, aspectMode, system: system.system, scale: glUseWindowSurface ? 1 : sdlScale, accelerated: !needsGL || glUseWindowSurface, initWidth: preferredWidth, initHeight: preferredHeight, fullscreen, opengl: glUseWindowSurface, shader: shaderPreset });
 await videoOutput.init();
 
 // For SDL-only GL carts, create EGL context using the SDL window's native handle
@@ -1273,6 +1283,10 @@ function printUsage() {
   console.log(``);
   console.log(`Video output:`);
   console.log(`  --video <mode>       Output mode: terminal, sdl, both (default: terminal)`);
+  console.log(`  --aspect <mode>      Picture shape: tv (the physical display the system was
+                       built for: 4:3 CRT for consoles, the LCD's own shape for
+                       handhelds), native (square pixels), core (core-reported)
+                       (default: tv)`);
   console.log(`  --scale <n>          SDL window scale factor (default: 2)`);
   console.log(`  --res <WxH>          Preferred resolution for WASM carts (e.g. 800x600, 1280x720)`);
   console.log(`  -f, --fullscreen     Start SDL window in fullscreen mode`);
