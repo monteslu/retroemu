@@ -8,6 +8,7 @@ terminal using [libretro](https://www.libretro.com/) WASM cores.
 - **PICO-8** — play `.p8` and `.p8.png` carts via [FAKE-08](https://github.com/jtothebell/fake-08) (MIT, no BIOS); thousands of free community carts run as-is
 - **Multiple video outputs** — terminal (ANSI art), SDL window, or both simultaneously
 - **Truecolor ANSI rendering** — half-block characters for clean pixel art
+- **Active Bezels** — optional per-game WASM companions ([active-bezel](https://www.npmjs.com/package/active-bezel)) that own the full 16:9 picture: live maps, telemetry panels, shader effects, even input remaps driven by game RAM — see [docs/ACTIVE_BEZELS.md](docs/ACTIVE_BEZELS.md)
 - **2100+ controllers supported** — via [SDL2](https://www.libsdl.org) with automatic mapping
 - **Low-latency audio** — direct SDL2 audio output
 - **Save states & battery saves** — automatic SRAM persistence
@@ -202,7 +203,19 @@ Terminal graphics options:
 Picture:
   --video-filter <f>   CRT post-process for SDL modes:
                        none (default), sharp, scanlines, crt
+  --shader <preset>    RetroArch .glslp shader preset on the GPU (SDL modes).
+                       Multi-pass; overrides --video-filter, which is the
+                       separate CPU post-process family
   --fullscreen, -f     Start the SDL window fullscreen
+
+Active Bezels (docs/ACTIVE_BEZELS.md):
+  --active-bezel <ab>  Attach an Active Bezel package (.ab or unpacked directory)
+  --active-bezel-auto  Discover the same-basename sidecar beside the ROM —
+                       packed Game.ab or an unpacked Game.ab/ directory
+  --active-bezel-config <json|@file>
+                       Per-game bezel preferences
+  --active-bezel-force Allow a manually selected package on a non-matching ROM
+  --active-bezel-dev   Watch the package and hot reload valid changes
 
 Gameplay:
   --cheats <json>      Cheat codes: inline JSON or @file
@@ -244,6 +257,7 @@ retroemu --frame-skip 3 ~/roms/my_game.sfc
 retroemu --save-dir ~/.emu/saves ~/roms/my_game.gbc
 retroemu --contrast 1.5 ~/roms/my_game.a26           # boost contrast for dark games
 retroemu --symbols braille --colors 2 ~/roms/my_game.gb   # monochrome braille
+retroemu --video sdl --active-bezel-auto ~/roms/my_game.nes   # game + its Game.ab bezel
 retroemu --symbols ascii --fg-only ~/roms/my_game.nes     # ASCII on black background
 
 # WASM carts (software rendering or GL-accelerated)

@@ -1299,7 +1299,7 @@ function printUsage() {
   console.log(`  --video-filter <f>   CRT post-process: none, sharp, scanlines, crt (SDL modes)
   --ff-speed <n>       Fast-forward multiplier, 0=uncapped (default: 4)
   --no-rewind          Disable rewind history (saves memory + per-frame work)
-  --active-bezel <ab>  Attach an Active Bezel v1 package (.ab or unpacked directory)
+  --active-bezel <ab>  Attach an Active Bezel package (.ab or unpacked directory)
   --active-bezel-auto  Discover the same-basename sidecar beside the ROM --
                        packed Game.ab or an unpacked Game.ab/ directory
   --active-bezel-config <json|@file>
