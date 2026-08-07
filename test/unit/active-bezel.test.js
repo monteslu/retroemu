@@ -337,7 +337,7 @@ test('machine-readable ABI schema covers the runtime contract', async () => {
 test('checked-in C and Lua reference packages validate and compile', async () => {
   const here = path.dirname(fileURLToPath(import.meta.url));
   const examples = path.resolve(here, '../../examples/active-bezel');
-  for (const name of ['diagnostic', 'adventure-map', 'metroid2-map', 'smb-expanded', 'lua-starter']) {
+  for (const name of ['diagnostic', 'lua-starter']) {
     const pkg = await ActiveBezelPackage.open(path.join(examples, name));
     assert.ok(await WebAssembly.compile(pkg.read(pkg.manifest.entry)));
   }

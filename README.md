@@ -268,7 +268,7 @@ retroemu --video sdl my_game.wasc                    # GL cart in SDL window
 retroemu --video sdl --video-filter crt ~/roms/sonic.md
 
 # Cheats (the core decodes the format)
-retroemu --video sdl --cheats '[{"code":"SXIOPO","enabled":true}]' smb.nes
+retroemu --video sdl --cheats '[{"code":"SXIOPO","enabled":true}]' my_game.nes
 
 # Remote play — P1 hosts, P2 joins with the printed code
 retroemu --video sdl --host-remote ~/roms/contra.nes

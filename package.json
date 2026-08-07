@@ -39,8 +39,7 @@
   "scripts": {
     "build:cores": "./scripts/build-all-cores.sh",
     "build:core": "./scripts/build-core.sh",
-    "build:active-bezel-adventure": "./scripts/build-active-bezel-adventure.sh",
-    "build:active-bezel-examples": "node scripts/generate-active-bezel-diagnostic.mjs && npm run build:active-bezel-adventure && node scripts/generate-active-bezel-references.mjs",
+    "build:active-bezel-examples": "node scripts/generate-active-bezel-diagnostic.mjs",
     "benchmark:active-bezel": "node scripts/benchmark-active-bezel.mjs",
     "test": "node --test test/unit/*.test.js",
     "lint": "eslint src/ bin/ index.js"

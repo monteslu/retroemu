@@ -181,22 +181,11 @@ The reproducible CPU/GPU numbers and methodology are in
 ## Reference packages
 
 - `diagnostic`: package/lifecycle/composition smoke test.
-- `adventure-map`: live Atari 2600 room/player visualization, exact-ROM
-  profile, and original packaging art in the right panel. Its `main.wasm` is
-  genuinely compiled from `main.c` with Emscripten; rebuild it with
-  `npm run build:active-bezel-adventure`. The current five-by-six room grid and
-  X/Y marker transform demonstrate live state but are not yet a verified model
-  of Adventure's actual world topology.
-- `metroid2-map`: Game Boy mission telemetry, exact-ROM profile.
-- `smb-expanded`: NES off-center expanded-scene experiment.
 - `lua-starter`: reusable Lua authoring proof.
 
-They contain no commercial ROM data. The Adventure development example now
-does contain a copy of its commercial packaging artwork sourced from the
-[Atari 2600 cartridge tour](https://2600adventures.atari.org/cartridge-tour.php);
-it is a local integration demonstration, not a claim that the art is cleared
-for redistribution. The other profiles identify the user-supplied ROM and read
-its live state.
+Both are fully original and game-agnostic: no commercial ROM data, no game
+assets, no per-game profiles. Game-specific packages belong outside this
+repository, keyed to the ROM the user supplies.
 
 ## Failure behavior
 
