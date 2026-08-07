@@ -317,6 +317,8 @@ The emulator uses [@monteslu/chafa-wasm](https://github.com/monteslu/chafa-wasm)
 
 Any gamepad recognized by [gamepad-node](https://github.com/monteslu/gamepad-node) works automatically. Buttons are mapped positionally — the south face button is always B, east is A, etc. — regardless of the controller's printed labels.
 
+The gamepad keeps working when retroemu's window isn't focused, so you can play while watching another window (set `SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=0` to restore SDL's focus-gated default). Keyboard input still requires focus — keys route to the focused window.
+
 | Gamepad Button | Libretro |
 |---------------|----------|
 | South face (A/Cross) | B |
