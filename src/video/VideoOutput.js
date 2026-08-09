@@ -107,9 +107,8 @@ export class VideoOutput {
         this.onDisplayChange?.(event.pixelWidth, event.pixelHeight);
       });
 
-      // GL presentation rides on the SDL window. If the context or the preset
-      // fails, say so and keep the CPU blit — a bad shader must not cost the
-      // user their game.
+      // GL presentation rides on the SDL window. Context and preset failures
+      // are both fatal and loud (see the catch below).
       if (this.shaderPreset) {
         const { GLRenderer } = await import('./GLRenderer.js');
         try {
@@ -117,17 +116,15 @@ export class VideoOutput {
             window: this.sdlRenderer.getWindow(),
             presetPath: this.shaderPreset,
           });
-          if (!this.glRenderer) {
-            console.error('[shader] no GL context available — falling back to the CPU path');
-          } else {
-            const st = this.glRenderer.status();
-            console.error(`[shader] ${this.shaderPreset} — ${st.passes} pass(es)`);
-            for (const w of st.warnings) console.error(`[shader] ${w}`);
-          }
+          const st = this.glRenderer.status();
+          console.error(`[shader] ${this.shaderPreset} — ${st.passes} pass(es)`);
+          for (const w of st.warnings) console.error(`[shader] ${w}`);
         } catch (err) {
-          console.error(`[shader] ${err.message}`);
-          console.error('[shader] falling back to the CPU path');
-          this.glRenderer = null;
+          // No CPU fallback: --shader was asked for by name, and the machines
+          // this runs on always have a GPU. A GL failure here is a broken
+          // stack (or a broken preset) the user needs to see, not a picture
+          // that quietly loses its shader.
+          throw new Error(`--shader ${this.shaderPreset}: ${err.message}`);
         }
       }
     }

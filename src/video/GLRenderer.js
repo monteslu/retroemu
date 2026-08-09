@@ -39,12 +39,14 @@ export class GLRenderer {
   }
 
   /**
-   * Build a renderer, or return null if GL is unavailable.
+   * Build a renderer. THROWS when the GL stack is broken.
    *
-   * NEVER throws for a missing/broken GL stack: a machine without working GL
-   * must fall back to the CPU blit, not fail to launch a game. A broken
-   * PRESET is different — that is the user asking for something specific and
-   * getting it wrong, so it is reported.
+   * The machines retroemu runs on always have a GPU, so a failed context
+   * is a broken stack to repair, not a condition to degrade around --
+   * silently dropping the user's --shader onto the CPU blit hides the
+   * breakage behind "the shader just doesn't show". A broken PRESET is the
+   * same idea one level up: the user asked for something specific, so both
+   * failures are loud.
    */
   static async create({ window, presetPath, existingContext = false } = {}) {
     const r = new GLRenderer({ window, presetPath });
@@ -52,12 +54,12 @@ export class GLRenderer {
       if (!existingContext) {
         const w = window?.pixelWidth || 640;
         const h = window?.pixelHeight || 480;
-        if (!gl.createContext(w, h)) return null;
+        if (!gl.createContext(w, h)) throw new Error('gl.createContext failed');
         r._contextOwned = true;
       }
       gl.makeCurrent();
-    } catch {
-      return null;
+    } catch (err) {
+      throw new Error(`GL stack is broken (no context for --shader): ${err.message}`);
     }
 
     if (presetPath) {
