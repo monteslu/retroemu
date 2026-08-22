@@ -495,6 +495,29 @@ Some libretro cores use hardware-accelerated GPU rendering via `RETRO_ENVIRONMEN
 
 The N64 core (parallel-n64) uses the Glide64 GPU plugin — the same one used by [N64Wasm](https://github.com/nbarkhina/N64Wasm) for full-speed browser N64 emulation.
 
+#### One process, several GL contexts
+
+native-gles dispatches every GL call against **one process-global current
+context**, and GL object names are plain integers with no context identity —
+two contexts both allocate texture name 1, 2, 3… independently. So anything
+holding a context must call `makeCurrent()` before its GL work, *including
+its teardown*: deleting "your" texture 3 while another context is current
+destroys **their** texture 3.
+
+This needs **webgl-node >= 1.5.1**, which puts `makeCurrent()` and `ctxId` on
+the context object itself. Before that they existed only on the wrapper that
+`createWebGL2Context()` returns — and consumers keep `gl` and discard the
+wrapper, so `ctx.makeCurrent?.()` was a silent no-op. The failure it produced
+is worth recognising: a live window goes **black at a healthy 60fps**
+(`GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT`, attachment `GL_NONE`) while a
+CPU readback of the same content still shows a perfect picture — because the
+readback reads the source FBO and the window presents by a separate blit.
+When those two disagree, believe the window: capture it with
+`import -window <id>` rather than trusting a screenshot API.
+
+wasmcart >= 0.24.0 is the matching half; it records and restores GL currency
+across a cart teardown.
+
 ### Key Modules
 
 **LibretroHost** (`src/core/LibretroHost.js`) is the central orchestrator. It:
@@ -665,9 +688,9 @@ needs no ROM and no core.
 | [gamepad-node](https://github.com/monteslu/gamepad-node) | W3C Gamepad API for Node.js via SDL2 — 2100+ controllers with standard mapping |
 | [@kmamal/sdl](https://github.com/kmamal/node-sdl) | Native SDL2 bindings for Node.js — audio output, SDL window rendering, gamepad input |
 | [@monteslu/chafa-wasm](https://github.com/monteslu/chafa-wasm) | Image-to-ANSI conversion — auto-detects Sixel, Kitty, or Unicode block art |
-| [wasmcart](https://github.com/wasmcart/wasmcart) | WASM cart host — loads .wasm/.wasc carts, provides ABI (input, audio, assets, GL) |
+| [wasmcart](https://github.com/wasmcart/wasmcart) | WASM cart host — loads .wasm/.wasc carts, provides ABI (input, audio, assets, GL). **>= 0.24.0** — earlier versions can corrupt another GL context on teardown |
 | [native-gles](https://github.com/monteslu/native-gles) | OpenGL ES 3.0 Node.js addon — EGL pbuffer context + ~100 GL function bindings |
-| [webgl-node](https://github.com/monteslu/webgl-node) | WebGL2 context for Node.js — provides canvas + WebGL2RenderingContext backed by native-gles |
+| [webgl-node](https://github.com/monteslu/webgl-node) | WebGL2 context for Node.js — provides canvas + WebGL2RenderingContext backed by native-gles. **>= 1.5.1** — see [One process, several GL contexts](#one-process-several-gl-contexts) |
 | [hsync](https://www.npmjs.com/package/hsync) | Remote play signaling — brokers the WebRTC handshake, then drops out of the loop |
 | [node-datachannel](https://github.com/murat-dogan/node-datachannel) | WebRTC data channels in Node (libdatachannel) — the P2P transport for remote play |
 
