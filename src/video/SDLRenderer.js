@@ -5,7 +5,10 @@ export class SDLRenderer {
     this.sdl = sdl;
     this.window = null;
     this.title = options.title || 'retroemu';
-    this.scale = options.scale || 2;
+    // 'auto' sizes the window to the display at first frame (and on source
+    // size changes): the largest integer scale that keeps the picture inside
+    // ~90% of the usable display height. A number is a fixed multiplier.
+    this.scale = options.scale === 'auto' ? 'auto' : (Number(options.scale) || 2);
     this.accelerated = options.accelerated !== false; // default true
     this.fullscreen = !!options.fullscreen;
     this.opengl = !!options.opengl;
@@ -20,10 +23,27 @@ export class SDLRenderer {
     this._userResized = false;
   }
 
+  // The largest integer scale that keeps `height` source rows inside ~90%
+  // of the usable display height. Computed per source height, so a mid-game
+  // resolution switch (SNES hi-res interlace doubling 224 -> 448) halves the
+  // scale and the window stays put instead of doubling.
+  _autoScale(height) {
+    if (!this._displayH) {
+      let usable = 1080;
+      try {
+        const d = this.sdl.video.displays[0];
+        usable = d?.usable?.height ?? d?.geometry?.height ?? 1080;
+      } catch { /* headless or no display info; assume 1080p */ }
+      this._displayH = usable;
+    }
+    return Math.max(1, Math.floor((this._displayH * 0.9) / Math.max(1, height)));
+  }
+
   // The window size that presents a width x height source at this.aspect
   // with integer-ish scale: height drives, width follows the aspect.
   _idealSize(width, height) {
-    const h = Math.max(1, Math.round(height * this.scale));
+    const scale = this.scale === 'auto' ? this._autoScale(height) : this.scale;
+    const h = Math.max(1, Math.round(height * scale));
     const ratio = this.aspect > 0 ? this.aspect : width / height;
     return { w: Math.max(1, Math.round(h * ratio)), h };
   }

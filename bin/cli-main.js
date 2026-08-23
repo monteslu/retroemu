@@ -43,7 +43,7 @@ const DEBUG = !!process.env.RETROEMU_DEBUG || process.argv.includes('--debug');
 const dlog = (...a) => { if (DEBUG) console.error(...a); };
 let videoMode = 'terminal';  // terminal | sdl | both
 let aspectMode = 'tv';       // tv (physical medium) | native (square pixels) | core
-let sdlScale = 1;
+let sdlScale = 'auto';
 let preferredWidth = 0;   // 0 = no preference (cart chooses)
 let preferredHeight = 0;
 let fullscreen = false;
@@ -108,7 +108,8 @@ for (let i = 0; i < args.length; i++) {
       process.exit(1);
     }
   } else if (args[i] === '--scale' && args[i + 1]) {
-    sdlScale = parseInt(args[++i], 10) || 2;
+    sdlScale = args[i + 1] === 'auto' ? 'auto' : (parseInt(args[i + 1], 10) || 2);
+    i++;
   } else if (args[i] === '--res' && args[i + 1]) {
     const parts = args[++i].split('x');
     preferredWidth = parseInt(parts[0], 10) || 0;
@@ -184,7 +185,7 @@ for (let i = 0; i < args.length; i++) {
 // Remote play guest: no ROM, no core — the host is emulating. Hand off.
 if (joinCode) {
   const { runJoin } = await import('./join.js');
-  await runJoin(joinCode, { watchOnly, scale: sdlScale || 3 });
+  await runJoin(joinCode, { watchOnly, scale: Number.isFinite(sdlScale) ? sdlScale : 3 });
   await new Promise(() => {}); // stay alive until the window closes
 }
 
@@ -1287,7 +1288,7 @@ function printUsage() {
                        built for: 4:3 CRT for consoles, the LCD's own shape for
                        handhelds), native (square pixels), core (core-reported)
                        (default: tv)`);
-  console.log(`  --scale <n>          SDL window scale factor (default: 2)`);
+  console.log(`  --scale <n|auto>     SDL window scale: integer multiplier, or auto to size\n                       the window to the display (default: auto)`);
   console.log(`  --res <WxH>          Preferred resolution for WASM carts (e.g. 800x600, 1280x720)`);
   console.log(`  -f, --fullscreen     Start SDL window in fullscreen mode`);
   console.log(`  --uncapped           Run as fast as the host allows (no 60 FPS cap)`);

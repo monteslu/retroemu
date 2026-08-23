@@ -35,7 +35,7 @@ export class VideoOutput {
     // consoles, the LCD's own shape for handhelds) | 'native' (square
     // pixels) | 'core' (core-reported). See src/video/aspect.js.
     this.aspectMode = options.aspectMode || 'tv';
-    this.sdlScale = options.scale || 2;
+    this.sdlScale = options.scale === 'auto' ? 'auto' : (options.scale || 2);
     this.sdlAccelerated = options.accelerated !== false; // default true
     this.sdlRenderer = null;
     this.initWidth = options.initWidth || 0;
