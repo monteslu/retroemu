@@ -71,7 +71,7 @@
     "romdev-platform-gba": "^0.11.0",
     "romdev-platform-snes": "^0.10.0",
     "rungame": "^0.14.1",
-    "wasmcart": "^0.24.0",
+    "wasmcart": "^0.31.0",
     "webgl-node": "^1.5.1",
     "yauzl": "^3.2.0"
   },

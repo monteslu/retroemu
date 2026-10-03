@@ -1202,7 +1202,11 @@ function mapGamepads() {
 
       // Triggers: try button values first, fall back to axes
       // Auto-calibrate: some gamepads (e.g. 8BitDo) report 0.5-0.64 at rest
-      const toU8 = (v) => Math.round(Math.max(0, Math.min(1, v || 0)) * 255);
+      // 32767, not 255: wasmcart ABI v4 widened wc_pad_t's triggers from
+      // uint8 to int16 so they share one scale with the sticks (and match
+      // SDL_GameControllerGetAxis / RETRO_DEVICE_ANALOG). Scaling by 255
+      // here would hand a fully pressed trigger to the cart as 0.8% travel.
+      const toI16Trigger = (v) => Math.round(Math.max(0, Math.min(1, v || 0)) * 32767);
       const gpIdx = gp._wcIdx = gp._wcIdx ?? i;
       if (!mapGamepads._triggerBaseline) mapGamepads._triggerBaseline = {};
       const rawLT = gp.buttons[6]?.value || 0;
@@ -1214,8 +1218,8 @@ function mapGamepads() {
       const bl = mapGamepads._triggerBaseline[gpIdx];
       const ltRange = Math.max(0.01, 1 - bl.left);
       const rtRange = Math.max(0.01, 1 - bl.right);
-      leftTrigger = toU8(Math.max(0, rawLT - bl.left) / ltRange);
-      rightTrigger = toU8(Math.max(0, rawRT - bl.right) / rtRange);
+      leftTrigger = toI16Trigger(Math.max(0, rawLT - bl.left) / ltRange);
+      rightTrigger = toI16Trigger(Math.max(0, rawRT - bl.right) / rtRange);
 
       // Debug: log full gamepad state once when any button is pressed
       if (!mapGamepads._debugged) {
@@ -1238,10 +1242,10 @@ function mapGamepads() {
       }
       // Fallback to axes if button-based triggers gave zero
       if (!leftTrigger && gp.axes.length > 4 && gp.axes[4] != null) {
-        leftTrigger = toU8((gp.axes[4] + 1) / 2);
+        leftTrigger = toI16Trigger((gp.axes[4] + 1) / 2);
       }
       if (!rightTrigger && gp.axes.length > 5 && gp.axes[5] != null) {
-        rightTrigger = toU8((gp.axes[5] + 1) / 2);
+        rightTrigger = toI16Trigger((gp.axes[5] + 1) / 2);
       }
     }
 
