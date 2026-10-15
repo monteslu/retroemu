@@ -40,8 +40,8 @@ export class SaveManager {
     // Copy the data (not just a view) since WASM memory may change during async write
     const data = Buffer.from(core.HEAPU8.slice(dataPtr, dataPtr + size));
     const savePath = this._sramPath(romPath);
-    await fs.mkdir(path.dirname(savePath), { recursive: true });
-    await fs.writeFile(savePath, data);
+    await fs.mkdir(path.dirname(statePath), { recursive: true });
+    await fs.writeFile(statePath, data);
 
     // Debug: show first 32 bytes of saved data
     const preview = Array.from(data.slice(0, 32)).map(b => b.toString(16).padStart(2, '0')).join(' ');
@@ -77,7 +77,9 @@ export class SaveManager {
     try {
       const ok = core._retro_serialize(ptr, size);
       if (ok) {
-        const data = Buffer.from(core.HEAPU8.buffer, ptr, size);
+        // Copy data to avoid race condition with async write
+        // Buffer.from(core.HEAPU8.slice(...)) creates a copy, safe from WASM memory changes
+        const data = Buffer.from(core.HEAPU8.slice(ptr, ptr + size));
         const statePath = this._statePath(romPath, slot);
         await fs.mkdir(path.dirname(statePath), { recursive: true });
         await fs.writeFile(statePath, data);
